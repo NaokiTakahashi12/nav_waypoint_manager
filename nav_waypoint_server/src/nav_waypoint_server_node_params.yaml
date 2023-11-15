@@ -1,0 +1,9 @@
+nav_waypoint_server:
+  waypoints_file:
+    type: string
+    default_value: waypoints.yaml
+    description: Waypoints file path
+  waypoint_frame_id:
+    type: string
+    default_value: map
+    description: Waypoint frame id
