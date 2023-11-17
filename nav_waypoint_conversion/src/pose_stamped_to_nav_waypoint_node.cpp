@@ -50,6 +50,7 @@ PoseStampedToNavWaypointNode::~PoseStampedToNavWaypointNode()
 void PoseStampedToNavWaypointNode::poseSubscribeCallback(
   const geometry_msgs::msg::PoseStamped::ConstSharedPtr & pose_msg)
 {
+  static int callback_counter = 0;
   nav_waypoint_msgs::msg::Waypoint::UniquePtr waypoint_msg;
 
   //! @todo to parameter
@@ -61,8 +62,11 @@ void PoseStampedToNavWaypointNode::poseSubscribeCallback(
   waypoint_msg = std::make_unique<nav_waypoint_msgs::msg::Waypoint>();
   waypoint_msg->pose = pose_msg->pose;
   waypoint_msg->stamp = pose_msg->header.stamp;
+  waypoint_msg->name =
+    "wp_" + std::to_string(pose_msg->header.stamp.sec) + "_" + std::to_string(callback_counter);
 
   m_waypoint_publisher->publish(std::move(waypoint_msg));
+  callback_counter++;
 }
 }  // namespace nav_waypoint_conversion
 
