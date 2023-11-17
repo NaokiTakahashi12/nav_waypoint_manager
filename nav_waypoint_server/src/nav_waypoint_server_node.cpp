@@ -5,6 +5,7 @@
 #include <fstream>
 
 #include <yaml-cpp/yaml.h>
+
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_srvs/srv/empty.hpp>
@@ -123,7 +124,7 @@ void NavWaypointServerNode::registWaypointCallback(
       break;
     }
   }
-  if (overwrited) {
+  if (not overwrited) {
     m_waypoints.waypoints.push_back(*msg);
   }
   m_waypoints.header.stamp = this->get_clock()->now();
@@ -152,6 +153,7 @@ void NavWaypointServerNode::publishWaypoints()
   nav_waypoint_msgs::msg::Waypoints::UniquePtr msg;
   msg = std::make_unique<nav_waypoint_msgs::msg::Waypoints>(m_waypoints);
   m_waypoints_publisher->publish(std::move(msg));
+  RCLCPP_INFO_STREAM(this->get_logger(), "Publish waypoints");
 }
 
 void NavWaypointServerNode::saveWaypoints(const nav_waypoint_msgs::msg::Waypoints & waypoints)
