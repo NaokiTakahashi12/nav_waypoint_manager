@@ -14,8 +14,12 @@
   <depend>rclcpp_components</depend>
   <depend>yaml_cpp_vendor</depend>
   <depend>generate_parameter_library</depend>
-  <depend>std_srvs</depend>
+  <depend>tf2_eigen</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2</depend>
+  <depend>std_msgs</depend>
   <depend>nav_waypoint_msgs</depend>
+  <depend>std_srvs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

@@ -1,0 +1,29 @@
+nav_route_server:
+  route_file:
+    type: string
+    default_value: route.yaml
+    description: Waypoint route file path
+  waypoint_frame_id:
+    type: string
+    default_value: map
+    description: Waypoint route frame id
+  robot_frame_id:
+    type: string
+    default_value: base_link
+    description: Robot frame id
+  route_index_auto_reset:
+    type: bool
+    default_value: true
+    description: Route index auto resetting on initialize
+  reach_observe_frequency:
+    type: double
+    default_value: 0.5
+    description: Waypoint reach observer frequency (Hz)
+  reach_position_threshold:
+    type: double
+    default_value: 1.0
+    description: Reach waypoint position threshold
+  publish_goal_with_reach_observe:
+    type: int
+    default_value: 5
+    description: Publish goal frequency (reach_observe_frequency / this)

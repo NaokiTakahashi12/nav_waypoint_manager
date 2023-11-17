@@ -17,16 +17,25 @@ ament_auto_find_build_dependencies()
 
 ament_auto_add_library(${PROJECT_NAME} SHARED
   src/nav_waypoint_server_node.cpp
+  src/nav_route_server_node.cpp
 )
 rclcpp_components_register_node(${PROJECT_NAME}
   PLUGIN "nav_waypoint_server::NavWaypointServerNode"
   EXECUTABLE nav_waypoint_server_node
 )
+rclcpp_components_register_node(${PROJECT_NAME}
+  PLUGIN "nav_waypoint_server::NavRouteServer"
+  EXECUTABLE nav_route_server_node
+)
 generate_parameter_library(nav_waypoint_server_node_params
   src/nav_waypoint_server_node_params.yaml
 )
+generate_parameter_library(nav_route_server_node_params
+  src/nav_route_server_node_params.yaml
+)
 target_link_libraries(${PROJECT_NAME}
   nav_waypoint_server_node_params
+  nav_route_server_node_params
 )
 
 if(BUILD_TESTING)
