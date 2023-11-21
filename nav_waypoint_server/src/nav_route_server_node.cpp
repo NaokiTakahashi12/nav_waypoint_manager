@@ -159,8 +159,8 @@ void NavRouteServer::waypointsSubscribeCallback(
 }
 
 void NavRouteServer::resetRouteServiceCallback(
-    const std_srvs::srv::Empty::Request::ConstSharedPtr &,
-    const std_srvs::srv::Empty::Response::SharedPtr &)
+  const std_srvs::srv::Empty::Request::ConstSharedPtr &,
+  const std_srvs::srv::Empty::Response::SharedPtr &)
 {
   std::lock_guard<std::mutex> route_index_lock{m_route_index_mutex};
   m_route_index = 0;
@@ -217,12 +217,12 @@ void NavRouteServer::reachWaypointObserverCallback()
         tf2::TimePointZero
       );
     } catch (const tf2::TransformException & tfe) {
-      RCLCPP_WARN_STREAM(this->get_logger(),
+      RCLCPP_WARN_STREAM(
+        this->get_logger(),
         "Could not transform "
-        << m_params.waypoint_frame_id
-        << " to "
-        << m_params.robot_frame_id
-      );
+          << m_params.waypoint_frame_id
+          << " to "
+          << m_params.robot_frame_id);
       return;
     }
     Eigen::Vector3d robot_position;
