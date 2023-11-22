@@ -1,10 +1,30 @@
+// Copyright (c) 2023 Naoki Takahashi
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+#include <yaml-cpp/yaml.h>
+
 #include <memory>
 #include <string>
 #include <functional>
 #include <vector>
 #include <fstream>
-
-#include <yaml-cpp/yaml.h>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
@@ -19,7 +39,7 @@ namespace nav_waypoint_server
 class NavWaypointServerNode : public rclcpp::Node
 {
 public:
-  NavWaypointServerNode(const rclcpp::NodeOptions &);
+  explicit NavWaypointServerNode(const rclcpp::NodeOptions &);
   ~NavWaypointServerNode();
 
 private:
@@ -124,7 +144,7 @@ void NavWaypointServerNode::registWaypointCallback(
       break;
     }
   }
-  if (not overwrited) {
+  if (!overwrited) {
     m_waypoints.waypoints.push_back(*msg);
   }
   m_waypoints.header.stamp = this->get_clock()->now();
@@ -195,7 +215,7 @@ void NavWaypointServerNode::saveWaypoints(const nav_waypoint_msgs::msg::Waypoint
   std::ofstream waypoints_file;
   waypoints_file.open(m_params.waypoints_file);
 
-  if (not waypoints_file.is_open()) {
+  if (!waypoints_file.is_open()) {
     RCLCPP_ERROR_STREAM(this->get_logger(), "Can't open file " << m_params.waypoints_file);
     return;
   }
