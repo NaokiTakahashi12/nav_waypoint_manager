@@ -39,7 +39,8 @@ private:
 };
 
 PoseStampedToNavWaypointNode::PoseStampedToNavWaypointNode(const rclcpp::NodeOptions & node_options)
-: rclcpp::Node("pose_stamped_to_nav_waypoint", node_options),
+: rclcpp::Node("pose_stamped_to_nav_waypoint",
+    rclcpp::NodeOptions(node_options).use_intra_process_comms(true)),
   m_waypoint_publisher(nullptr),
   m_pose_subscription(nullptr)
 {
