@@ -90,7 +90,7 @@ private:
 
 NavRouteServer::NavRouteServer(const rclcpp::NodeOptions & node_options)
 : rclcpp::Node("nav_route_server",
-    rclcpp::NodeOptions(node_options).use_intra_process_comms(true)),
+    rclcpp::NodeOptions(node_options).use_intra_process_comms(false)),
   m_route_reset_index(-1),
   m_route_index(m_route_reset_index),
   m_publish_goal_index(0),
