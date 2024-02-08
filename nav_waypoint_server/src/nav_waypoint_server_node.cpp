@@ -70,7 +70,8 @@ private:
 };
 
 NavWaypointServerNode::NavWaypointServerNode(const rclcpp::NodeOptions & node_options)
-: rclcpp::Node("nav_waypoint_server", node_options),
+: rclcpp::Node("nav_waypoint_server",
+    rclcpp::NodeOptions(node_options).use_intra_process_comms(false)),
   m_waypoints(),
   m_waypoints_publisher(nullptr),
   m_regist_waypoint_subscriber(nullptr),
