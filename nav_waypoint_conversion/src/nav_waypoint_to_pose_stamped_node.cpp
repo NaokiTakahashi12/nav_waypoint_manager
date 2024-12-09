@@ -32,8 +32,8 @@ public:
   ~NavWaypointToPoseStampedNode();
 
 private:
-  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr m_pose_publisher;
-  rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr m_waypoint_subscription;
+  rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_publisher_;
+  rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr waypoint_subscription_;
 
   void waypoitSubscribeCallback(const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr &);
 };
@@ -41,16 +41,16 @@ private:
 NavWaypointToPoseStampedNode::NavWaypointToPoseStampedNode(const rclcpp::NodeOptions & node_options)
 : rclcpp::Node("nav_waypoint_to_pose_stamped",
     rclcpp::NodeOptions(node_options).use_intra_process_comms(true)),
-  m_pose_publisher(nullptr),
-  m_waypoint_subscription(nullptr)
+  pose_publisher_(nullptr),
+  waypoint_subscription_(nullptr)
 {
   RCLCPP_INFO_STREAM(this->get_logger(), "Start initialize " << this->get_name());
 
-  m_pose_publisher = this->create_publisher<geometry_msgs::msg::PoseStamped>(
+  pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
     "~/output_pose",
     rclcpp::QoS(2)
   );
-  m_waypoint_subscription = this->create_subscription<nav_waypoint_msgs::msg::Waypoint>(
+  waypoint_subscription_ = this->create_subscription<nav_waypoint_msgs::msg::Waypoint>(
     "~/input_waypoint",
     rclcpp::QoS(5),
     std::bind(
@@ -77,7 +77,7 @@ void NavWaypointToPoseStampedNode::waypoitSubscribeCallback(
   pose_msg->header.stamp = waypoint_msg->stamp;
   pose_msg->header.frame_id = "map";
 
-  m_pose_publisher->publish(std::move(pose_msg));
+  pose_publisher_->publish(std::move(pose_msg));
 }
 }  // namespace nav_waypoint_conversion
 
