@@ -38,6 +38,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <tf2_eigen/tf2_eigen.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <nav_waypoint_msgs/msg/waypoint.hpp>
 #include <nav_waypoint_msgs/msg/waypoints.hpp>
 #include <nav_waypoint_msgs/msg/route.hpp>
@@ -57,6 +58,7 @@ private:
   const int m_route_reset_index;
   int m_route_index;
   int m_publish_goal_index;
+  bool m_release_resume_state;
 
   std::mutex m_waypoints_mutex;
   std::mutex m_route_index_mutex;
@@ -64,6 +66,7 @@ private:
   rclcpp::Publisher<nav_waypoint_msgs::msg::Waypoint>::SharedPtr m_waypoint_publisher;
   rclcpp::Publisher<nav_waypoint_msgs::msg::Route>::SharedPtr m_route_publisher;
   rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoints>::SharedPtr m_waypoints_subscriber;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr m_release_resume_subscriber;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr m_reset_route_service;
   rclcpp::TimerBase::SharedPtr m_reach_waypoint_observer_timer;
 
@@ -80,6 +83,7 @@ private:
   void resetRouteServiceCallback(
     const std_srvs::srv::Empty::Request::ConstSharedPtr &,
     const std_srvs::srv::Empty::Response::SharedPtr &);
+  void releaseResumeCallback(const std_msgs::msg::Bool::ConstSharedPtr &);
   void reachWaypointObserverCallback();
 
   void publishRoute();
@@ -94,9 +98,11 @@ NavRouteServer::NavRouteServer(const rclcpp::NodeOptions & node_options)
   m_route_reset_index(-1),
   m_route_index(m_route_reset_index),
   m_publish_goal_index(0),
+  m_release_resume_state(false),
   m_waypoint_publisher(nullptr),
   m_route_publisher(nullptr),
   m_waypoints_subscriber(nullptr),
+  m_release_resume_subscriber(nullptr),
   m_reset_route_service(nullptr),
   m_reach_waypoint_observer_timer(nullptr),
   m_tf_listener(nullptr),
@@ -153,6 +159,15 @@ NavRouteServer::NavRouteServer(const rclcpp::NodeOptions & node_options)
       std::placeholders::_2
     )
   );
+  m_release_resume_subscriber = this->create_subscription<std_msgs::msg::Bool>(
+    "~/release_resume",
+    rclcpp::QoS(3),
+    std::bind(
+      &NavRouteServer::releaseResumeCallback,
+      this,
+      std::placeholders::_1
+    )
+  );
   const unsigned int reach_waypoint_observer_duration_milliseconds =
     1e3 / m_params.reach_observe_frequency;
   m_reach_waypoint_observer_timer = this->create_wall_timer(
@@ -177,6 +192,7 @@ void NavRouteServer::waypointsSubscribeCallback(
   std::lock_guard<std::mutex> waypoint_lock{m_waypoints_mutex};
   RCLCPP_INFO(this->get_logger(), "Recived new waypoint");
   m_waypoints = msg;
+  m_route_index = 0;
 }
 
 void NavRouteServer::resetRouteServiceCallback(
@@ -188,13 +204,28 @@ void NavRouteServer::resetRouteServiceCallback(
   RCLCPP_INFO(this->get_logger(), "Resetted route index");
 }
 
+void NavRouteServer::releaseResumeCallback(const std_msgs::msg::Bool::ConstSharedPtr & msg)
+{
+  m_release_resume_state = msg->data;
+}
+
 void NavRouteServer::reachWaypointObserverCallback()
 {
-  int waypoint_index = m_route_reset_index;
-  double goal_dist_norm;
+  static bool startup_resume = true;
 
+  const bool release_resume_state = m_release_resume_state;
+  int waypoint_index = m_route_reset_index;
+  m_release_resume_state = false;
+
+  if (release_resume_state) {
+    startup_resume = false;
+  }
   if (m_route.route.size() < 1) {
     RCLCPP_WARN(this->get_logger(), "Route size is ZERO");
+    return;
+  }
+  if (startup_resume) {
+    RCLCPP_INFO(this->get_logger(), "Startup resume now; please interact");
     return;
   }
   //! waypoint_lock scope
@@ -251,23 +282,53 @@ void NavRouteServer::reachWaypointObserverCallback()
     Eigen::Vector3d dist_position;
     const geometry_msgs::msg::Pose waypoint_pose = m_waypoints->waypoints[waypoint_index].pose;
 
-    robot_position.x() = tf_stamped.transform.translation.x;
-    robot_position.y() = tf_stamped.transform.translation.y;
-    robot_position.z() = tf_stamped.transform.translation.z;
-    waypoint_position.x() = waypoint_pose.position.x;
-    waypoint_position.y() = waypoint_pose.position.y;
-    waypoint_position.z() = waypoint_pose.position.z;
+    if (m_params.evalute_only_xy_reach) {
+      robot_position.x() = tf_stamped.transform.translation.x;
+      robot_position.y() = tf_stamped.transform.translation.y;
+      robot_position.z() = 0.0;
+      waypoint_position.x() = waypoint_pose.position.x;
+      waypoint_position.y() = waypoint_pose.position.y;
+      waypoint_position.z() = 0.0;
+    } else {
+      robot_position.x() = tf_stamped.transform.translation.x;
+      robot_position.y() = tf_stamped.transform.translation.y;
+      robot_position.z() = tf_stamped.transform.translation.z;
+      waypoint_position.x() = waypoint_pose.position.x;
+      waypoint_position.y() = waypoint_pose.position.y;
+      waypoint_position.z() = waypoint_pose.position.z;
+    }
 
     dist_position = waypoint_position - robot_position;
-    goal_dist_norm = dist_position.lpNorm<2>();
-  }
-  if (m_params.reach_position_threshold > goal_dist_norm) {
-    m_route_index++;
-    m_publish_goal_index = 0;
-    return;
+    const double goal_dist_norm = dist_position.lpNorm<2>();
+    double goal_reached_radius = m_params.reach_position_threshold;
+    for (const auto & property : m_waypoints->waypoints[waypoint_index].properties) {
+      if (property.key == "goal_reached_radius") {
+        goal_reached_radius = std::stof(property.value);
+        break;
+      }
+    }
+    if (goal_reached_radius > goal_dist_norm) {
+      bool resume_enabled = false;
+      for (const auto & property : m_waypoints->waypoints[waypoint_index].properties) {
+        if (property.key == "stop_with_resume") {
+          if (property.value == "true") {
+            resume_enabled = true;
+          }
+          break;
+        }
+      }
+      if (resume_enabled && !release_resume_state) {
+        RCLCPP_INFO(this->get_logger(), "Resume state now; please interact");
+        return;
+      }
+      m_route_index++;
+      m_publish_goal_index = 0;
+      return;
+    }
   }
   if (m_publish_goal_index == 0) {
     publishLatestWaypoint(waypoint_index);
+    RCLCPP_INFO_STREAM(this->get_logger(), "Next waypoint is " << m_waypoints->waypoints[waypoint_index].name);
   }
   if (m_publish_goal_index >= m_params.publish_goal_with_reach_observe) {
     m_publish_goal_index = 0;

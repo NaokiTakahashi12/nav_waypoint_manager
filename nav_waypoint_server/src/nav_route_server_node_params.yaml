@@ -37,7 +37,7 @@ nav_route_server:
     description: Route index auto resetting on initialize
   reach_observe_frequency:
     type: double
-    default_value: 0.5
+    default_value: 1.0
     description: Waypoint reach observer frequency (Hz)
   reach_position_threshold:
     type: double
@@ -45,5 +45,9 @@ nav_route_server:
     description: Reach waypoint position threshold
   publish_goal_with_reach_observe:
     type: int
-    default_value: 5
+    default_value: 10
     description: Publish goal frequency (reach_observe_frequency / this)
+  evalute_only_xy_reach:
+    type: bool
+    default_value: false
+    description: Evalute only xy reach (bool)
