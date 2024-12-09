@@ -249,7 +249,7 @@ nav_waypoint_msgs::msg::Waypoints NavWaypointServerNode::loadWaypoints(
     for (auto pitr = pbegin; pitr != pend; ++pitr) {
       nav_waypoint_msgs::msg::Property p;
       p.key = pitr->first.as<std::string>();
-      p.value = pitr->second["value"].as<std::string>();
+      p.value = pitr->second.as<std::string>();
       w.properties.push_back(p);
     }
     ret_waypoints.waypoints.push_back(w);
