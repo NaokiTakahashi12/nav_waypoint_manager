@@ -85,6 +85,18 @@ void PoseStampedToNavWaypointNode::poseSubscribeCallback(
   waypoint_msg->stamp = pose_msg->header.stamp;
   waypoint_msg->name =
     "wp_" + std::to_string(pose_msg->header.stamp.sec) + "_" + std::to_string(callback_counter);
+  {
+    nav_waypoint_msgs::msg::Property default_waypoint_property;
+    default_waypoint_property.key = "goal_reached_radius";
+    default_waypoint_property.value = "1.0";
+    waypoint_msg->properties.push_back(default_waypoint_property);
+  }
+  {
+    nav_waypoint_msgs::msg::Property default_waypoint_property;
+    default_waypoint_property.key = "stop_with_resume";
+    default_waypoint_property.value = "false";
+    waypoint_msg->properties.push_back(default_waypoint_property);
+  }
 
   m_waypoint_publisher->publish(std::move(waypoint_msg));
   callback_counter++;
