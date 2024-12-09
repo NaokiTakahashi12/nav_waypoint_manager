@@ -32,8 +32,8 @@ public:
   ~PoseStampedToNavWaypointNode();
 
 private:
-  rclcpp::Publisher<nav_waypoint_msgs::msg::Waypoint>::SharedPtr m_waypoint_publisher;
-  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr m_pose_subscription;
+  rclcpp::Publisher<nav_waypoint_msgs::msg::Waypoint>::SharedPtr waypoint_publisher_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_subscription_;
 
   void poseSubscribeCallback(const geometry_msgs::msg::PoseStamped::ConstSharedPtr &);
 };
@@ -41,16 +41,16 @@ private:
 PoseStampedToNavWaypointNode::PoseStampedToNavWaypointNode(const rclcpp::NodeOptions & node_options)
 : rclcpp::Node("pose_stamped_to_nav_waypoint",
     rclcpp::NodeOptions(node_options).use_intra_process_comms(true)),
-  m_waypoint_publisher(nullptr),
-  m_pose_subscription(nullptr)
+  waypoint_publisher_(nullptr),
+  pose_subscription_(nullptr)
 {
   RCLCPP_INFO_STREAM(this->get_logger(), "Start initialize " << this->get_name());
 
-  m_waypoint_publisher = this->create_publisher<nav_waypoint_msgs::msg::Waypoint>(
+  waypoint_publisher_ = this->create_publisher<nav_waypoint_msgs::msg::Waypoint>(
     "~/output_waypoint",
     rclcpp::QoS(2)
   );
-  m_pose_subscription = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+  pose_subscription_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
     "~/input_pose",
     rclcpp::QoS(2),
     std::bind(
@@ -85,8 +85,20 @@ void PoseStampedToNavWaypointNode::poseSubscribeCallback(
   waypoint_msg->stamp = pose_msg->header.stamp;
   waypoint_msg->name =
     "wp_" + std::to_string(pose_msg->header.stamp.sec) + "_" + std::to_string(callback_counter);
+  {
+    nav_waypoint_msgs::msg::Property default_waypoint_property;
+    default_waypoint_property.key = "goal_reached_radius";
+    default_waypoint_property.value = "1.0";
+    waypoint_msg->properties.push_back(default_waypoint_property);
+  }
+  {
+    nav_waypoint_msgs::msg::Property default_waypoint_property;
+    default_waypoint_property.key = "stop_with_resume";
+    default_waypoint_property.value = "false";
+    waypoint_msg->properties.push_back(default_waypoint_property);
+  }
 
-  m_waypoint_publisher->publish(std::move(waypoint_msg));
+  waypoint_publisher_->publish(std::move(waypoint_msg));
   callback_counter++;
 }
 }  // namespace nav_waypoint_conversion

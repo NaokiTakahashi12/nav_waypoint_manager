@@ -43,15 +43,15 @@ public:
   ~NavWaypointServerNode();
 
 private:
-  nav_waypoint_msgs::msg::Waypoints m_waypoints;
+  nav_waypoint_msgs::msg::Waypoints waypoints_;
 
-  rclcpp::Publisher<nav_waypoint_msgs::msg::Waypoints>::SharedPtr m_waypoints_publisher;
-  rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr m_regist_waypoint_subscriber;
-  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr m_save_latest_waypoint_service;
-  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr m_publish_waypoints_service;
+  rclcpp::Publisher<nav_waypoint_msgs::msg::Waypoints>::SharedPtr waypoints_publisher_;
+  rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr regist_waypoint_subscriber_;
+  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr save_latest_waypoint_service_;
+  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr publish_waypoints_service_;
 
-  std::unique_ptr<ParamListener> m_param_listener;
-  nav_waypoint_server::Params m_params;
+  std::unique_ptr<ParamListener> param_listener_;
+  nav_waypoint_server::Params params_;
 
   void registWaypointCallback(
     const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr &);
@@ -72,29 +72,29 @@ private:
 NavWaypointServerNode::NavWaypointServerNode(const rclcpp::NodeOptions & node_options)
 : rclcpp::Node("nav_waypoint_server",
     rclcpp::NodeOptions(node_options).use_intra_process_comms(false)),
-  m_waypoints(),
-  m_waypoints_publisher(nullptr),
-  m_regist_waypoint_subscriber(nullptr),
-  m_save_latest_waypoint_service(nullptr),
-  m_publish_waypoints_service(nullptr),
-  m_param_listener(nullptr)
+  waypoints_(),
+  waypoints_publisher_(nullptr),
+  regist_waypoint_subscriber_(nullptr),
+  save_latest_waypoint_service_(nullptr),
+  publish_waypoints_service_(nullptr),
+  param_listener_(nullptr)
 {
   RCLCPP_INFO_STREAM(this->get_logger(), "Start initialize " << this->get_name());
 
-  m_param_listener = std::make_unique<ParamListener>(
+  param_listener_ = std::make_unique<ParamListener>(
     this->get_node_parameters_interface()
   );
-  m_params = m_param_listener->get_params();
-  tryLoadWaypointsFromFile(m_params.waypoints_file);
+  params_ = param_listener_->get_params();
+  tryLoadWaypointsFromFile(params_.waypoints_file);
 
-  m_waypoints.header.stamp = this->get_clock()->now();
-  m_waypoints.header.frame_id = m_params.waypoint_frame_id;
+  waypoints_.header.stamp = this->get_clock()->now();
+  waypoints_.header.frame_id = params_.waypoint_frame_id;
 
-  m_waypoints_publisher = this->create_publisher<nav_waypoint_msgs::msg::Waypoints>(
+  waypoints_publisher_ = this->create_publisher<nav_waypoint_msgs::msg::Waypoints>(
     "~/waypoints",
     rclcpp::QoS(5).transient_local()
   );
-  m_regist_waypoint_subscriber = this->create_subscription<nav_waypoint_msgs::msg::Waypoint>(
+  regist_waypoint_subscriber_ = this->create_subscription<nav_waypoint_msgs::msg::Waypoint>(
     "~/regist",
     rclcpp::QoS(5),
     std::bind(
@@ -103,7 +103,7 @@ NavWaypointServerNode::NavWaypointServerNode(const rclcpp::NodeOptions & node_op
       std::placeholders::_1
     )
   );
-  m_save_latest_waypoint_service = this->create_service<std_srvs::srv::Empty>(
+  save_latest_waypoint_service_ = this->create_service<std_srvs::srv::Empty>(
     "~/save",
     std::bind(
       &NavWaypointServerNode::saveWaypointsServiceCallback,
@@ -112,7 +112,7 @@ NavWaypointServerNode::NavWaypointServerNode(const rclcpp::NodeOptions & node_op
       std::placeholders::_2
     )
   );
-  m_publish_waypoints_service = this->create_service<std_srvs::srv::Empty>(
+  publish_waypoints_service_ = this->create_service<std_srvs::srv::Empty>(
     "~/publish",
     std::bind(
       &NavWaypointServerNode::publishWaypointsServiceCallback,
@@ -137,7 +137,7 @@ void NavWaypointServerNode::registWaypointCallback(
   bool overwrited = false;
   RCLCPP_INFO(this->get_logger(), "Recived new waypoint");
 
-  for (auto && waypoint : m_waypoints.waypoints) {
+  for (auto && waypoint : waypoints_.waypoints) {
     if (waypoint.name == msg->name) {
       RCLCPP_INFO_STREAM(this->get_logger(), "Overwrite waypoint: " << msg->name);
       waypoint = *msg;
@@ -146,9 +146,9 @@ void NavWaypointServerNode::registWaypointCallback(
     }
   }
   if (!overwrited) {
-    m_waypoints.waypoints.push_back(*msg);
+    waypoints_.waypoints.push_back(*msg);
   }
-  m_waypoints.header.stamp = this->get_clock()->now();
+  waypoints_.header.stamp = this->get_clock()->now();
   publishWaypoints();
   RCLCPP_INFO_STREAM(this->get_logger(), "Registed new waypoint: " << msg->name);
 }
@@ -158,7 +158,7 @@ void NavWaypointServerNode::saveWaypointsServiceCallback(
   const std_srvs::srv::Empty::Response::SharedPtr &)
 {
   RCLCPP_INFO(this->get_logger(), "Start save waypoints");
-  saveWaypoints(m_waypoints);
+  saveWaypoints(waypoints_);
   RCLCPP_INFO(this->get_logger(), "Save waypoints successfully");
 }
 
@@ -172,8 +172,8 @@ void NavWaypointServerNode::publishWaypointsServiceCallback(
 void NavWaypointServerNode::publishWaypoints()
 {
   nav_waypoint_msgs::msg::Waypoints::UniquePtr msg;
-  msg = std::make_unique<nav_waypoint_msgs::msg::Waypoints>(m_waypoints);
-  m_waypoints_publisher->publish(std::move(msg));
+  msg = std::make_unique<nav_waypoint_msgs::msg::Waypoints>(waypoints_);
+  waypoints_publisher_->publish(std::move(msg));
   RCLCPP_INFO_STREAM(this->get_logger(), "Publish waypoints");
 }
 
@@ -214,10 +214,10 @@ void NavWaypointServerNode::saveWaypoints(const nav_waypoint_msgs::msg::Waypoint
   yaml_emitter << waypoint_manager_yaml_node;
 
   std::ofstream waypoints_file;
-  waypoints_file.open(m_params.waypoints_file);
+  waypoints_file.open(params_.waypoints_file);
 
   if (!waypoints_file.is_open()) {
-    RCLCPP_ERROR_STREAM(this->get_logger(), "Can't open file " << m_params.waypoints_file);
+    RCLCPP_ERROR_STREAM(this->get_logger(), "Can't open file " << params_.waypoints_file);
     return;
   }
   waypoints_file << yaml_emitter.c_str();
@@ -249,7 +249,7 @@ nav_waypoint_msgs::msg::Waypoints NavWaypointServerNode::loadWaypoints(
     for (auto pitr = pbegin; pitr != pend; ++pitr) {
       nav_waypoint_msgs::msg::Property p;
       p.key = pitr->first.as<std::string>();
-      p.value = pitr->second["value"].as<std::string>();
+      p.value = pitr->second.as<std::string>();
       w.properties.push_back(p);
     }
     ret_waypoints.waypoints.push_back(w);
@@ -260,7 +260,7 @@ nav_waypoint_msgs::msg::Waypoints NavWaypointServerNode::loadWaypoints(
 void NavWaypointServerNode::tryLoadWaypointsFromFile(const std::string & file_path)
 {
   if (isLoadableWaypoints(file_path)) {
-    m_waypoints = loadWaypoints(file_path);
+    waypoints_ = loadWaypoints(file_path);
   } else {
     RCLCPP_WARN_STREAM(this->get_logger(), "Can't open waypoints file: " << file_path);
   }
