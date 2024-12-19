@@ -47,6 +47,7 @@ private:
 
   rclcpp::Publisher<nav_waypoint_msgs::msg::Waypoints>::SharedPtr waypoints_publisher_;
   rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr regist_waypoint_subscriber_;
+  rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr modify_waypoint_subscriber_;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr save_latest_waypoint_service_;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr publish_waypoints_service_;
 
@@ -54,6 +55,8 @@ private:
   nav_waypoint_server::Params params_;
 
   void registWaypointCallback(
+    const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr &);
+  void modifyWaypointCallback(
     const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr &);
   void saveWaypointsServiceCallback(
     const std_srvs::srv::Empty::Request::ConstSharedPtr &,
@@ -75,6 +78,7 @@ NavWaypointServerNode::NavWaypointServerNode(const rclcpp::NodeOptions & node_op
   waypoints_(),
   waypoints_publisher_(nullptr),
   regist_waypoint_subscriber_(nullptr),
+  modify_waypoint_subscriber_(nullptr),
   save_latest_waypoint_service_(nullptr),
   publish_waypoints_service_(nullptr),
   param_listener_(nullptr)
@@ -99,6 +103,15 @@ NavWaypointServerNode::NavWaypointServerNode(const rclcpp::NodeOptions & node_op
     rclcpp::QoS(5),
     std::bind(
       &NavWaypointServerNode::registWaypointCallback,
+      this,
+      std::placeholders::_1
+    )
+  );
+  modify_waypoint_subscriber_ = this->create_subscription<nav_waypoint_msgs::msg::Waypoint>(
+    "~/modify",
+    rclcpp::QoS(5),
+    std::bind(
+      &NavWaypointServerNode::modifyWaypointCallback,
       this,
       std::placeholders::_1
     )
@@ -151,6 +164,23 @@ void NavWaypointServerNode::registWaypointCallback(
   waypoints_.header.stamp = this->get_clock()->now();
   publishWaypoints();
   RCLCPP_INFO_STREAM(this->get_logger(), "Registed new waypoint: " << msg->name);
+}
+
+void NavWaypointServerNode::modifyWaypointCallback(
+  const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr & msg)
+{
+  bool found_waypoint = false;
+  for (auto && waypoint : waypoints_.waypoints) {
+    if (waypoint.name != msg->name) {
+      continue;
+    }
+    waypoint = *msg;
+    found_waypoint = true;
+    break;
+  }
+  if (!found_waypoint) {
+    RCLCPP_WARN_STREAM(this->get_logger(), "Ignore waypoint " << msg->name);
+  }
 }
 
 void NavWaypointServerNode::saveWaypointsServiceCallback(
