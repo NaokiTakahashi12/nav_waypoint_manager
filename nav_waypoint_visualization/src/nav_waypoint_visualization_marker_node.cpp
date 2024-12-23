@@ -43,7 +43,6 @@ NavWaypointVisualizationMarkerNode::NavWaypointVisualizationMarkerNode(const rcl
 
 void NavWaypointVisualizationMarkerNode::subscribeWaypointsCallback(const nav_waypoint_msgs::msg::Waypoints::ConstSharedPtr & msg)
 {
-  RCLCPP_INFO(this->get_logger(), "Subscribed waypoints");
   if (msg->waypoints.size() <= 0) {
     RCLCPP_INFO(this->get_logger(), "Empty waypoints msg subscribed");
     return;

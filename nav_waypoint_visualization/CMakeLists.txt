@@ -14,12 +14,26 @@ find_package(ament_cmake_auto REQUIRED)
 
 ament_auto_find_build_dependencies()
 
+generate_parameter_library(nav_waypoint_interactive_marker_node_params
+  src/nav_waypoint_interactive_marker_node_params.yaml
+)
+
 ament_auto_add_library(${PROJECT_NAME}_components SHARED
   src/nav_waypoint_visualization_marker_node.cpp
+  src/nav_waypoint_interactive_marker_node.cpp
 )
+target_link_libraries(${PROJECT_NAME}_components
+ nav_waypoint_interactive_marker_node_params
+)
+
+
 rclcpp_components_register_node(${PROJECT_NAME}_components
   PLUGIN "nav_waypoint_visualization::NavWaypointVisualizationMarkerNode"
   EXECUTABLE nav_waypoint_visualization_marker_node
+)
+rclcpp_components_register_node(${PROJECT_NAME}_components
+  PLUGIN "nav_waypoint_visualization::NavWaypointInteractiveMarkerNode"
+  EXECUTABLE nav_waypoint_interactive_marker_node
 )
 
 if(BUILD_TESTING)
