@@ -180,6 +180,8 @@ void NavWaypointServerNode::modifyWaypointCallback(
   }
   if (!found_waypoint) {
     RCLCPP_WARN_STREAM(this->get_logger(), "Ignore waypoint " << msg->name);
+  } else {
+    publishWaypoints();
   }
 }
 
