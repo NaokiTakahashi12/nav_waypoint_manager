@@ -42,6 +42,7 @@ def generate_launch_description():
     use_sim_time_param = {
         'use_sim_time': launch.substitutions.LaunchConfiguration('use_sim_time')
     }
+
     return launch.LaunchDescription([
         launch.actions.DeclareLaunchArgument(
             'waypoint_frame_id',
@@ -92,6 +93,24 @@ def generate_launch_description():
                 parameters=[
                     waypoint_frame_id_param,
                     route_file_param,
+                    use_sim_time_param
+                ]
+            ),
+            launch_ros.actions.Node(
+                package='nav_waypoint_visualization',
+                executable='nav_waypoint_visualization_marker_node',
+                name='nav_waypoint_visualization_marker',
+                output='screen',
+                parameters=[
+                    use_sim_time_param
+                ]
+            ),
+            launch_ros.actions.Node(
+                package='nav_waypoint_visualization',
+                executable='nav_waypoint_interactive_marker_node',
+                name='nav_waypoint_interactive_marker',
+                output='screen',
+                parameters=[
                     use_sim_time_param
                 ]
             ),
