@@ -176,11 +176,15 @@ void NavWaypointInteractiveMarkerNode::setFlagMarkerFromProperties(
   const std::vector<nav_waypoint_msgs::msg::Property> & properties)
 {
   double goal_reached_radius = 1.0;
+  bool stop_with_resume = false;
 
   for (const auto & p : properties) {
     if ("goal_reached_radius" == p.key) {
       goal_reached_radius = std::stof(p.value);
-      break;
+    } else if ("stop_with_resume" == p.key) {
+      if ("true" == p.value) {
+        stop_with_resume = true;
+      }
     }
   }
 
@@ -227,6 +231,12 @@ void NavWaypointInteractiveMarkerNode::setFlagMarkerFromProperties(
   flag_marker_parts[3].color.g = 1.0;
   flag_marker_parts[3].color.b = 0.0;
   flag_marker_parts[3].color.a = 0.3;
+
+  if (stop_with_resume) {
+    flag_marker_parts[3].color.r = 0.7;
+    flag_marker_parts[3].color.g = 0.0;
+    flag_marker_parts[3].color.b = 0.0;
+  }
 
   for (const auto & marker : flag_marker_parts) {
     waypoint_control.markers.push_back(marker);
