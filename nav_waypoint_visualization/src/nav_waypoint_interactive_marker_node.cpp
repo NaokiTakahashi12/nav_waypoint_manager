@@ -157,13 +157,16 @@ void NavWaypointInteractiveMarkerNode::setArrowMarker(
   visualization_msgs::msg::Marker arrow_marker;
 
   arrow_marker.type = visualization_msgs::msg::Marker::ARROW;
-  arrow_marker.scale.x = 1;
-  arrow_marker.scale.y = 0.1;
-  arrow_marker.scale.z = 0.1;
-  arrow_marker.color.r = 1;
-  arrow_marker.color.g = 0;
-  arrow_marker.color.b = 0;
-  arrow_marker.color.a = 0.7;
+  arrow_marker.scale.x = 1.0;
+  arrow_marker.scale.y = 0.05;
+  arrow_marker.scale.z = 0.3;
+  arrow_marker.pose.position.x = 0.0;
+  arrow_marker.pose.position.y = 0.0;
+  arrow_marker.pose.position.z = 1.0;
+  arrow_marker.color.r = 1.0;
+  arrow_marker.color.g = 0.0;
+  arrow_marker.color.b = 0.0;
+  arrow_marker.color.a = 0.6;
 
   waypoint_orientation_control.markers.push_back(arrow_marker);
 }
@@ -181,15 +184,7 @@ void NavWaypointInteractiveMarkerNode::setFlagMarkerFromProperties(
     }
   }
 
-  std::vector<visualization_msgs::msg::Marker> flag_marker_parts(5);
-
-  flag_marker_parts[4].type = visualization_msgs::msg::Marker::CYLINDER;
-  flag_marker_parts[4].scale.x = 2.0 * goal_reached_radius;
-  flag_marker_parts[4].scale.y = 2.0 * goal_reached_radius;
-  flag_marker_parts[4].scale.z = 0.01;
-  flag_marker_parts[4].color.r = 0.0;
-  flag_marker_parts[4].color.g = 1.0;
-  flag_marker_parts[4].color.b = 0.0;
+  std::vector<visualization_msgs::msg::Marker> flag_marker_parts(4);
 
   flag_marker_parts[0].type = visualization_msgs::msg::Marker::CYLINDER;
   flag_marker_parts[0].scale.x = 0.1;
@@ -201,41 +196,37 @@ void NavWaypointInteractiveMarkerNode::setFlagMarkerFromProperties(
   flag_marker_parts[0].color.r = 0.75;
   flag_marker_parts[0].color.g = 0.75;
   flag_marker_parts[0].color.b = 0.75;
+  flag_marker_parts[0].color.a = 0.6;
 
-  flag_marker_parts[1].type = visualization_msgs::msg::Marker::CUBE;
-  flag_marker_parts[1].scale.x = 0.001;
-  flag_marker_parts[1].scale.y = 0.6;
-  flag_marker_parts[1].scale.z = 0.4;
+  flag_marker_parts[1].type = visualization_msgs::msg::Marker::SPHERE;
+  flag_marker_parts[1].scale.x = 0.2;
+  flag_marker_parts[1].scale.y = 0.2;
+  flag_marker_parts[1].scale.z = 0.2;
   flag_marker_parts[1].pose.position.x = 0.0;
-  flag_marker_parts[1].pose.position.y = 0.3;
-  flag_marker_parts[1].pose.position.z = 1.0;
-  flag_marker_parts[1].color.r = 0.0;
-  flag_marker_parts[1].color.g = 0.5;
-  flag_marker_parts[1].color.b = 1.0;
+  flag_marker_parts[1].pose.position.y = 0.0;
+  flag_marker_parts[1].pose.position.z = 1.25;
+  flag_marker_parts[1].color.r = 1.0;
+  flag_marker_parts[1].color.g = 1.0;
+  flag_marker_parts[1].color.b = 0.0;
+  flag_marker_parts[1].color.a = 0.6;
 
-  flag_marker_parts[2].type = visualization_msgs::msg::Marker::SPHERE;
-  flag_marker_parts[2].scale.x = 0.2;
-  flag_marker_parts[2].scale.y = 0.2;
-  flag_marker_parts[2].scale.z = 0.2;
+  flag_marker_parts[2].type = visualization_msgs::msg::Marker::CYLINDER;
+  flag_marker_parts[2].scale.x = 0.9;
+  flag_marker_parts[2].scale.y = 0.9;
+  flag_marker_parts[2].scale.z = 1.5;
   flag_marker_parts[2].pose.position.x = 0.0;
   flag_marker_parts[2].pose.position.y = 0.0;
-  flag_marker_parts[2].pose.position.z = 1.25;
-  flag_marker_parts[2].color.r = 1.0;
-  flag_marker_parts[2].color.g = 1.0;
-  flag_marker_parts[2].color.b = 0.0;
+  flag_marker_parts[2].pose.position.z = flag_marker_parts[2].scale.z * 0.5;
+  flag_marker_parts[2].color.a = 0.0;
 
   flag_marker_parts[3].type = visualization_msgs::msg::Marker::CYLINDER;
-  flag_marker_parts[3].scale.x = 0.9;
-  flag_marker_parts[3].scale.y = 0.9;
-  flag_marker_parts[3].scale.z = 1.5;
-  flag_marker_parts[3].pose.position.x = 0.0;
-  flag_marker_parts[3].pose.position.y = 0.0;
-  flag_marker_parts[3].pose.position.z = flag_marker_parts[3].scale.z * 0.5;
-
-  for (auto && marker : flag_marker_parts) {
-    marker.color.a = 0.6;
-  }
-  flag_marker_parts[3].color.a = 0.0;
+  flag_marker_parts[3].scale.x = 2.0 * goal_reached_radius;
+  flag_marker_parts[3].scale.y = 2.0 * goal_reached_radius;
+  flag_marker_parts[3].scale.z = 0.03;
+  flag_marker_parts[3].color.r = 0.0;
+  flag_marker_parts[3].color.g = 1.0;
+  flag_marker_parts[3].color.b = 0.0;
+  flag_marker_parts[3].color.a = 0.3;
 
   for (const auto & marker : flag_marker_parts) {
     waypoint_control.markers.push_back(marker);
