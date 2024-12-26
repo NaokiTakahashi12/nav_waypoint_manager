@@ -1,0 +1,4 @@
+nav_waypoint_interactive_marker_node:
+  interactive_xy_only:
+    type: bool
+    default_value: true

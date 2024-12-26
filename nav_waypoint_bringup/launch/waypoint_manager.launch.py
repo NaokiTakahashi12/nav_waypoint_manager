@@ -42,6 +42,11 @@ def generate_launch_description():
     use_sim_time_param = {
         'use_sim_time': launch.substitutions.LaunchConfiguration('use_sim_time')
     }
+
+    shutdown_event = launch.actions.EmitEvent(
+        event=launch.events.Shutdown()
+    )
+
     return launch.LaunchDescription([
         launch.actions.DeclareLaunchArgument(
             'waypoint_frame_id',
@@ -80,7 +85,8 @@ def generate_launch_description():
                             waypoint_frame_id_param,
                             waypoints_file_param,
                             use_sim_time_param
-                        ]
+                        ],
+                        on_exit=shutdown_event
                     )
                 ]
             ),
@@ -93,7 +99,28 @@ def generate_launch_description():
                     waypoint_frame_id_param,
                     route_file_param,
                     use_sim_time_param
-                ]
+                ],
+                on_exit=shutdown_event
+            ),
+            launch_ros.actions.Node(
+                package='nav_waypoint_visualization',
+                executable='nav_waypoint_visualization_marker_node',
+                name='nav_waypoint_visualization_marker',
+                output='screen',
+                parameters=[
+                    use_sim_time_param
+                ],
+                on_exit=shutdown_event
+            ),
+            launch_ros.actions.Node(
+                package='nav_waypoint_visualization',
+                executable='nav_waypoint_interactive_marker_node',
+                name='nav_waypoint_interactive_marker',
+                output='screen',
+                parameters=[
+                    use_sim_time_param
+                ],
+                on_exit=shutdown_event
             ),
             launch_ros.actions.Node(
                 package='nav_waypoint_conversion',
@@ -106,7 +133,8 @@ def generate_launch_description():
                 remappings=[
                     ('~/input_pose', '/set_waypoint'),
                     ('~/output_waypoint', 'nav_waypoint_server/regist')
-                ]
+                ],
+                on_exit=shutdown_event
             ),
             launch_ros.actions.Node(
                 package='nav_waypoint_conversion',
@@ -119,7 +147,8 @@ def generate_launch_description():
                 remappings=[
                     ('~/input_waypoint', 'nav_route_server/waypoint'),
                     ('~/output_pose', '/goal_pose')
-                ]
+                ],
+                on_exit=shutdown_event
             )
         ])
     ])
