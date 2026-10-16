@@ -1,0 +1,6 @@
+# Internal edit coordination. Each route server owns its own reference set.
+string owner
+nav_waypoint_msgs/Route route
+---
+bool success
+string message

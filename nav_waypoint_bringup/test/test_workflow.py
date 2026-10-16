@@ -35,7 +35,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile
 import yaml
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_waypoint_msgs.msg import Property, Route, RouteProgress, Waypoint, Waypoints
-from nav_waypoint_msgs.srv import DeleteWaypoint, SetRoute, UpsertWaypoint
+from nav_waypoint_msgs.srv import DeleteWaypoint, ReserveRoute, SetRoute, UpsertWaypoint
 from std_msgs.msg import Bool
 from std_srvs.srv import Empty, Trigger
 from tf2_msgs.msg import TFMessage
@@ -283,6 +283,188 @@ class WorkflowTest(unittest.TestCase):
         self.spin(0.15)
         self.assertEqual(self.messages['progress'].route_index, 0)
 
+    def test_same_route_and_unreferenced_rename_keep_running(self):
+        self.waypoint('unchanged_route', 5)
+        self.waypoint('rename_unreferenced', 8)
+        self.route(['unchanged_route'])
+        self.start()
+        self.wait(lambda: self.messages['progress'].state == 'running')
+        self.route(['unchanged_route'])
+        self.assertEqual(self.messages['progress'].state, 'running')
+        command = [str(Path(get_package_prefix('nav_waypoint_bringup')) /
+                       'lib/nav_waypoint_bringup/waypoint_edit'),
+                   'rename', 'rename_unreferenced', 'renamed_unreferenced']
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.wait(lambda: process.poll() is not None, timeout=12)
+        stdout, stderr = process.communicate()
+        self.assertEqual(process.returncode, 0, (stdout, stderr))
+        self.spin(0.2)
+        self.assertEqual(self.messages['progress'].state, 'running')
+
+    def test_edit_waiting_goal_clears_previous_wait(self):
+        self.waypoint('edited_wait', 0, stop=True)
+        self.route(['edited_wait'])
+        self.start()
+        self.wait(lambda: self.messages['progress'].state == 'waiting_resume')
+        self.waypoint('edited_wait', 5, stop=False)
+        self.wait(lambda: self.messages['progress'].state == 'running')
+        self.tf(5)
+        self.wait(lambda: self.messages['progress'].state == 'completed')
+
+    def test_identical_and_unrelated_updates_do_not_increase_goal_rate(self):
+        self.waypoint('rate_goal', 5)
+        self.route(['rate_goal'])
+        self.start()
+        self.wait(lambda: self.messages['progress'].state == 'running')
+        self.history['goals'].clear()
+        started = time.monotonic()
+        for _ in range(20):
+            self.call(Empty, '/nav_waypoint_server/publish')
+            self.spin(0.015)
+        elapsed = time.monotonic() - started
+        # 20 Hz / interval 2 = at most 10 Hz, allowing boundary jitter.
+        self.assertLessEqual(len(self.history['goals']), int(elapsed * 10) + 2)
+
+    def test_default_radius_is_explicit_and_noop_upsert_does_not_publish(self):
+        w = Waypoint(name='default_radius', frame_id='warehouse')
+        w.pose.orientation.w = 1.0
+        response = self.call(UpsertWaypoint, '/nav_waypoint_server/upsert',
+                             UpsertWaypoint.Request(waypoint=w))
+        self.assertTrue(response.success, response.message)
+        self.wait(lambda: any(w.name == 'default_radius'
+                              for w in self.messages['waypoints'].waypoints))
+        stored = next(w for w in self.messages['waypoints'].waypoints
+                      if w.name == 'default_radius')
+        self.assertEqual(float(next(p.value for p in stored.properties
+                                    if p.key == 'goal_reached_radius')), 1.0)
+        stamp = self.messages['waypoints'].header.stamp
+        w.stamp = self.node.get_clock().now().to_msg()
+        self.call(UpsertWaypoint, '/nav_waypoint_server/upsert',
+                  UpsertWaypoint.Request(waypoint=w))
+        self.spin(0.2)
+        self.assertEqual(self.messages['waypoints'].header.stamp, stamp)
+
+    def test_reference_reservation_guards_delete_without_topic_delivery(self):
+        self.waypoint('reserved_reference', 5)
+        request = ReserveRoute.Request(owner='/test_reference_owner',
+                                       route=Route(route=['reserved_reference']))
+        response = self.call(ReserveRoute, '/nav_waypoint_server/reserve_route', request)
+        self.assertTrue(response.success, response.message)
+        response = self.call(DeleteWaypoint, '/nav_waypoint_server/delete',
+                             DeleteWaypoint.Request(name='reserved_reference'))
+        self.assertFalse(response.success)
+        request.route.route = []
+        self.assertTrue(self.call(ReserveRoute, '/nav_waypoint_server/reserve_route',
+                                  request).success)
+        self.assertTrue(self.call(DeleteWaypoint, '/nav_waypoint_server/delete',
+                                  DeleteWaypoint.Request(name='reserved_reference')).success)
+        request.route.route = ['reserved_reference']
+        self.assertFalse(self.call(ReserveRoute, '/nav_waypoint_server/reserve_route',
+                                   request).success)
+
+    def test_stale_dynamic_tf_does_not_advance_route(self):
+        self.waypoint('stale_tf_goal', 0)
+        path = self.root / 'stale_tf_route.yaml'
+        path.write_text('waypoint_manager:\n  route: [stale_tf_goal]\n')
+        progress = []
+        subscription = self.node.create_subscription(
+            RouteProgress, '/stale_tf_route/progress', progress.append,
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        publisher = self.node.create_publisher(TFMessage, '/tf', 10)
+        resume = self.node.create_publisher(Bool, '/stale_tf_route/release_resume', 3)
+        try:
+            self.spawn('nav_waypoint_server', 'nav_route_server_node', name='stale_tf_route',
+                       route_file=str(path), robot_frame_id='stale_base',
+                       reach_observe_frequency=20.0)
+            self.wait(lambda: progress and progress[-1].state == 'startup_wait')
+            transform = TransformStamped()
+            transform.header.frame_id = 'warehouse'
+            transform.child_frame_id = 'stale_base'
+            transform.transform.rotation.w = 1.0
+            transform.header.stamp = self.node.get_clock().now().to_msg()
+            transform.header.stamp.sec -= 60
+            for _ in range(3):
+                publisher.publish(TFMessage(transforms=[transform]))
+                self.spin(0.1)
+            resume.publish(Bool(data=True))
+            self.wait(lambda: progress[-1].state == 'blocked' and
+                      'timestamp' in progress[-1].reason)
+            self.assertEqual(progress[-1].route_index, 0)
+            transform.header.stamp = self.node.get_clock().now().to_msg()
+            publisher.publish(TFMessage(transforms=[transform]))
+            self.wait(lambda: progress[-1].state == 'completed')
+        finally:
+            self.node.destroy_subscription(subscription)
+            self.node.destroy_publisher(publisher)
+            self.node.destroy_publisher(resume)
+
+    def test_optional_adapter_suppresses_identical_position_goals(self):
+        poses = []
+        subscription = self.node.create_subscription(
+            PoseStamped, '/dedup_adapter/output_pose', poses.append, 10)
+        publisher = self.node.create_publisher(Waypoint, '/dedup_adapter/input_waypoint', 10)
+        try:
+            self.spawn('nav_waypoint_conversion', 'nav_waypoint_to_pose_stamped_node',
+                       name='dedup_adapter', publish_unchanged_goals=False)
+            self.wait(lambda: publisher.get_subscription_count() > 0)
+            w = Waypoint(name='dedup', frame_id='warehouse')
+            w.pose.orientation.w = 1.0
+            publisher.publish(w)
+            self.wait(lambda: len(poses) == 1)
+            for _ in range(5):
+                w.stamp = self.node.get_clock().now().to_msg()
+                publisher.publish(w)
+                self.spin(0.05)
+            self.assertEqual(len(poses), 1)
+            w.pose.position.x = 1.0
+            publisher.publish(w)
+            self.wait(lambda: len(poses) == 2)
+            w.name = 'another_visit'
+            publisher.publish(w)
+            self.wait(lambda: len(poses) == 3)
+        finally:
+            self.node.destroy_subscription(subscription)
+            self.node.destroy_publisher(publisher)
+
+    def test_slow_route_save_does_not_block_reset_or_observer(self):
+        self.waypoint('slow_save_goal', 5)
+        path = self.root / 'slow_save_route.yaml'
+        path.write_text('waypoint_manager:\n  route: [slow_save_goal]\n')
+        output = self.root / 'slow_save_output.yaml'
+        os.mkfifo(output)
+        progress = []
+        subscription = self.node.create_subscription(
+            RouteProgress, '/slow_save_route/progress', progress.append,
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        client = self.node.create_client(Trigger, '/slow_save_route/save')
+        writer = None
+        try:
+            self.spawn('nav_waypoint_server', 'nav_route_server_node', name='slow_save_route',
+                       route_file=str(path), route_save_file=str(output),
+                       reach_observe_frequency=20.0)
+            self.wait(lambda: progress and progress[-1].state == 'startup_wait')
+            self.assertTrue(client.wait_for_service(timeout_sec=5))
+            future = client.call_async(Trigger.Request())
+            self.spin(0.2)
+            self.assertFalse(future.done())
+            started = time.monotonic()
+            self.call(Empty, '/slow_save_route/reset')
+            self.assertLess(time.monotonic() - started, 1.0)
+            self.assertFalse(future.done())
+            writer = os.open(output, os.O_WRONLY | os.O_NONBLOCK)
+            os.write(writer, b'waypoint_manager: {}\n')
+            os.close(writer)
+            writer = None
+            self.wait(future.done)
+            self.assertTrue(future.result().success, future.result().message)
+            self.assertEqual(yaml.safe_load(output.read_text())['waypoint_manager']['route'],
+                             ['slow_save_goal'])
+        finally:
+            if writer is not None:
+                os.close(writer)
+            self.node.destroy_subscription(subscription)
+            self.node.destroy_client(client)
+
     def test_invalid_edits_and_routes_are_rejected(self):
         valid = self.waypoint('valid', 5)
         self.route(['valid'])
@@ -343,7 +525,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertTrue(self.call(DeleteWaypoint, '/nav_waypoint_server/delete',
                                   DeleteWaypoint.Request(name='delete')).success)
         self.wait(lambda: self.messages['markers'].markers and
-                  all(m.action == m.DELETEALL for m in self.messages['markers'].markers))
+                  all(m.action == m.DELETE for m in self.messages['markers'].markers))
 
     def test_resume_survives_missing_tf(self):
         self.waypoint('delayed', 5)

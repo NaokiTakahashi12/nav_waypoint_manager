@@ -20,6 +20,12 @@
 
 #include <algorithm>
 #include <memory>
+#include <unordered_map>
+#include <unordered_set>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -30,10 +36,12 @@
 #include <nav_waypoint_msgs/msg/route.hpp>
 #include <nav_waypoint_msgs/srv/upsert_waypoint.hpp>
 #include <nav_waypoint_msgs/srv/delete_waypoint.hpp>
+#include <nav_waypoint_msgs/srv/reserve_route.hpp>
 #include <nav_waypoint_msgs/validation.hpp>
 #include <nav_waypoint_server/nav_waypoint_server_node_params.hpp>
 
 #include "dataset_io.hpp"
+#include "async_saver.hpp"
 
 namespace nav_waypoint_server
 {
@@ -45,7 +53,10 @@ public:
   {
     param_listener_ = std::make_unique<ParamListener>(get_node_parameters_interface());
     params_ = param_listener_->get_params();
-    if (params_.waypoint_frame_id.empty()) {
+    if (params_.waypoint_frame_id.empty() ||
+      !std::isfinite(params_.default_goal_reached_radius) ||
+      params_.default_goal_reached_radius <= 0.0)
+    {
       throw std::invalid_argument("waypoint_frame_id must not be empty");
     }
     waypoints_.header.frame_id = params_.waypoint_frame_id;
@@ -77,21 +88,48 @@ public:
           RCLCPP_ERROR(get_logger(), "Rejected modification: %s", e.what());
         }
       });
-    route_subscription_ = create_subscription<nav_waypoint_msgs::msg::Route>(
-      "nav_route_server/route", rclcpp::QoS(1).transient_local(),
-      [this](nav_waypoint_msgs::msg::Route::ConstSharedPtr route) {route_ = route;});
-    save_ = create_service<std_srvs::srv::Trigger>(
-      "~/save", [this](std_srvs::srv::Trigger::Request::ConstSharedPtr,
-      std_srvs::srv::Trigger::Response::SharedPtr response) {
+    reserve_service_ = create_service<nav_waypoint_msgs::srv::ReserveRoute>(
+      "~/reserve_route", [this](nav_waypoint_msgs::srv::ReserveRoute::Request::ConstSharedPtr req,
+      nav_waypoint_msgs::srv::ReserveRoute::Response::SharedPtr response) {
         try {
-          saveWaypoints();
+          if (req->owner.empty() || (!req->route.header.frame_id.empty() &&
+          req->route.header.frame_id != params_.waypoint_frame_id))
+          {
+            throw std::invalid_argument("Invalid route owner or frame");
+          }
+          std::unordered_set<std::string> known, references;
+          for (const auto & w : waypoints_.waypoints) {known.insert(w.name);}
+          for (const auto & name : req->route.route) {
+            if (!known.count(name)) {
+              throw std::invalid_argument("Unknown route waypoint: " + name);
+            }
+            references.insert(name);
+          }
+          route_references_[req->owner] = std::move(references);
           response->success = true;
-          response->message = "Saved waypoints";
-          RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
-        } catch (const std::exception & e) {
-          response->message = e.what();
-          RCLCPP_ERROR(get_logger(), "Save failed: %s", e.what());
-        }
+          response->message = "Route references reserved";
+        } catch (const std::exception & e) {response->message = e.what();}
+      });
+    save_ = create_service<std_srvs::srv::Trigger>(
+      "~/save", [this](rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr service,
+      std::shared_ptr<rmw_request_id_t> header, std_srvs::srv::Trigger::Request::SharedPtr) {
+        const auto snapshot = waypoints_;
+        const auto frame = params_.waypoint_frame_id;
+        const auto path = params_.waypoints_save_file.empty() ?
+        params_.waypoints_file : params_.waypoints_save_file;
+        auto reply = [service, header](bool success, const std::string & message) {
+          std_srvs::srv::Trigger::Response response;
+          response.success = success;
+          response.message = message;
+          try {service->send_response(*header, response);} catch (const std::exception &) {}
+        };
+        if (!saver_.submit(
+          [snapshot, frame, path, reply]() {
+            try {
+              saveWaypoints(snapshot, path, frame);
+              reply(true, "Saved waypoints");
+            } catch (const std::exception & e) {reply(false, e.what());}
+          })) {reply(false, "Save queue is full; retry later");}
       });
     publish_ = create_service<std_srvs::srv::Empty>(
       "~/publish", [this](std_srvs::srv::Empty::Request::ConstSharedPtr,
@@ -110,17 +148,15 @@ public:
     delete_service_ = create_service<nav_waypoint_msgs::srv::DeleteWaypoint>(
       "~/delete", [this](nav_waypoint_msgs::srv::DeleteWaypoint::Request::ConstSharedPtr request,
       nav_waypoint_msgs::srv::DeleteWaypoint::Response::SharedPtr response) {
-        // Refuse deletion until the route snapshot is known. Route updates validate
-        // against the latest waypoint snapshot again before progression.
-        if (!route_) {
-          response->message = "Route has not been received yet";
+        if (route_references_.empty()) {
+          response->message = "Route references have not been received yet";
           return;
         }
-        if (std::find(route_->route.begin(), route_->route.end(), request->name) !=
-        route_->route.end())
-        {
-          response->message = "Remove the waypoint from the route before deleting it";
-          return;
+        for (const auto & owner : route_references_) {
+          if (owner.second.count(request->name)) {
+            response->message = "Remove the waypoint from the route before deleting it";
+            return;
+          }
         }
         const auto found = std::find_if(
           waypoints_.waypoints.begin(), waypoints_.waypoints.end(),
@@ -139,16 +175,17 @@ public:
 
 private:
   nav_waypoint_msgs::msg::Waypoints waypoints_;
-  nav_waypoint_msgs::msg::Route::ConstSharedPtr route_;
+  std::unordered_map<std::string, std::unordered_set<std::string>> route_references_;
   std::unique_ptr<ParamListener> param_listener_;
   Params params_;
   rclcpp::Publisher<nav_waypoint_msgs::msg::Waypoints>::SharedPtr publisher_;
   rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr regist_, modify_;
-  rclcpp::Subscription<nav_waypoint_msgs::msg::Route>::SharedPtr route_subscription_;
+  rclcpp::Service<nav_waypoint_msgs::srv::ReserveRoute>::SharedPtr reserve_service_;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr publish_;
   rclcpp::Service<nav_waypoint_msgs::srv::UpsertWaypoint>::SharedPtr upsert_service_;
   rclcpp::Service<nav_waypoint_msgs::srv::DeleteWaypoint>::SharedPtr delete_service_;
+  AsyncSaver saver_;
 
   void publishWaypoints()
   {
@@ -156,9 +193,31 @@ private:
     publisher_->publish(waypoints_);
   }
 
+  void normalize(nav_waypoint_msgs::msg::Waypoint & w) const
+  {
+    if (std::none_of(
+        w.properties.begin(), w.properties.end(),
+        [](const nav_waypoint_msgs::msg::Property & p) {return p.key == "goal_reached_radius";}))
+    {
+      nav_waypoint_msgs::msg::Property p;
+      p.key = "goal_reached_radius";
+      std::ostringstream value;
+      value << std::setprecision(std::numeric_limits<double>::max_digits10) <<
+        params_.default_goal_reached_radius;
+      p.value = value.str();
+      w.properties.push_back(p);
+    }
+    std::sort(
+      w.properties.begin(), w.properties.end(),
+      [](const nav_waypoint_msgs::msg::Property & a, const nav_waypoint_msgs::msg::Property & b) {
+        return a.key < b.key;
+      });
+  }
+
   void upsert(nav_waypoint_msgs::msg::Waypoint w, bool require_existing)
   {
     nav_waypoint_msgs::validateWaypoint(w, params_.waypoint_frame_id);
+    normalize(w);
     w.frame_id = params_.waypoint_frame_id;
     w.stamp = now();
     auto found = std::find_if(
@@ -170,6 +229,7 @@ private:
       }
       waypoints_.waypoints.push_back(w);
     } else {
+      if (nav_waypoint_msgs::sameWaypoint(*found, w)) {return;}
       *found = w;
     }
     publishWaypoints();
@@ -208,20 +268,21 @@ private:
           w.properties.push_back(p);
         }
       }
+      normalize(w);
       result.waypoints.push_back(w);
     }
     nav_waypoint_msgs::validateWaypoints(result, params_.waypoint_frame_id);
     return result;
   }
 
-  void saveWaypoints()
+  static void saveWaypoints(
+    const nav_waypoint_msgs::msg::Waypoints & snapshot,
+    const std::string & path, const std::string & frame)
   {
-    nav_waypoint_msgs::validateWaypoints(waypoints_, params_.waypoint_frame_id);
-    const auto path = params_.waypoints_save_file.empty() ?
-      params_.waypoints_file : params_.waypoints_save_file;
-    auto root = outputDataset(path, params_.waypoint_frame_id);
+    nav_waypoint_msgs::validateWaypoints(snapshot, frame);
+    auto root = outputDataset(path, frame);
     YAML::Node entries(YAML::NodeType::Map);
-    for (const auto & w : waypoints_.waypoints) {
+    for (const auto & w : snapshot.waypoints) {
       YAML::Node entry;
       entry["pose"]["position"]["x"] = w.pose.position.x;
       entry["pose"]["position"]["y"] = w.pose.position.y;

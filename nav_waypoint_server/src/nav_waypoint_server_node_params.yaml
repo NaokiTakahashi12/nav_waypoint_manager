@@ -34,3 +34,8 @@ nav_waypoint_server:
     type: string
     default_value: ""
     description: Save destination; empty uses waypoints_file
+  default_goal_reached_radius:
+    read_only: true
+    type: double
+    default_value: 1.0
+    description: Radius assigned to waypoints without an explicit radius

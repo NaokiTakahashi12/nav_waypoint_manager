@@ -64,3 +64,13 @@ nav_route_server:
     type: string
     default_value: ""
     description: Save destination; empty uses route_file
+  max_transform_age:
+    read_only: true
+    type: double
+    default_value: 1.0
+    description: Maximum dynamic TF age in seconds; zero-stamped static TF is accepted
+  future_transform_tolerance:
+    read_only: true
+    type: double
+    default_value: 0.5
+    description: Maximum dynamic TF timestamp lead in seconds

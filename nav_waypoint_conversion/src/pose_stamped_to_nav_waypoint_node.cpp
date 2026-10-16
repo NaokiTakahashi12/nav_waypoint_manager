@@ -100,12 +100,6 @@ void PoseStampedToNavWaypointNode::poseSubscribeCallback(
     "_" + std::to_string(callback_counter_++);
   {
     nav_waypoint_msgs::msg::Property default_waypoint_property;
-    default_waypoint_property.key = "goal_reached_radius";
-    default_waypoint_property.value = "1.0";
-    waypoint_msg->properties.push_back(default_waypoint_property);
-  }
-  {
-    nav_waypoint_msgs::msg::Property default_waypoint_property;
     default_waypoint_property.key = "stop_with_resume";
     default_waypoint_property.value = "false";
     waypoint_msg->properties.push_back(default_waypoint_property);

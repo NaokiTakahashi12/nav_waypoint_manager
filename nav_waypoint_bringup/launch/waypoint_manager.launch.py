@@ -84,6 +84,9 @@ def generate_launch_description():
         launch.actions.DeclareLaunchArgument(
             'route_save_file', default_value=os.path.join(data_dir, 'route.yaml')
         ),
+        launch.actions.DeclareLaunchArgument('reach_position_threshold', default_value='1.0'),
+        launch.actions.DeclareLaunchArgument('max_transform_age', default_value='1.0'),
+        launch.actions.DeclareLaunchArgument('publish_unchanged_goals', default_value='true'),
         launch.actions.DeclareLaunchArgument('use_rviz', default_value='false'),
         launch.actions.DeclareLaunchArgument(
             'use_sim_time',
@@ -102,6 +105,10 @@ def generate_launch_description():
                             waypoint_frame_id_param,
                             waypoints_file_param,
                             waypoints_save_file_param,
+                            {'default_goal_reached_radius':
+                             launch_ros.parameter_descriptions.ParameterValue(
+                                 launch.substitutions.LaunchConfiguration(
+                                     'reach_position_threshold'), value_type=float)},
                             use_sim_time_param
                         ],
                         on_exit=shutdown_event
@@ -117,6 +124,12 @@ def generate_launch_description():
                     waypoint_frame_id_param,
                     route_file_param,
                     route_save_file_param,
+                    {'reach_position_threshold': launch_ros.parameter_descriptions.ParameterValue(
+                        launch.substitutions.LaunchConfiguration('reach_position_threshold'),
+                        value_type=float)},
+                    {'max_transform_age': launch_ros.parameter_descriptions.ParameterValue(
+                        launch.substitutions.LaunchConfiguration('max_transform_age'),
+                        value_type=float)},
                     use_sim_time_param
                 ],
                 on_exit=shutdown_event
@@ -163,6 +176,9 @@ def generate_launch_description():
                 output='screen',
                 parameters=[
                     waypoint_frame_id_param,
+                    {'publish_unchanged_goals': launch_ros.parameter_descriptions.ParameterValue(
+                        launch.substitutions.LaunchConfiguration('publish_unchanged_goals'),
+                        value_type=bool)},
                     use_sim_time_param
                 ],
                 remappings=[

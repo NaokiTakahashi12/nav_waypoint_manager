@@ -1,6 +1,7 @@
 #include <string>
 #include <memory>
 #include <functional>
+#include <unordered_map>
 
 #include <geometry_msgs/msg/point.hpp>
 #include <visualization_msgs/msg/marker.hpp>
@@ -18,6 +19,8 @@ public:
 
 private:
   void publishRouteMarker();
+  visualization_msgs::msg::MarkerArray last_rendered_;
+  bool rendered_{false};
   void subscribeWaypointsCallback(const nav_waypoint_msgs::msg::Waypoints::ConstSharedPtr &);
   void subscribeRouteCallback(const nav_waypoint_msgs::msg::Route::ConstSharedPtr &);
 
@@ -66,29 +69,16 @@ void NavWaypointVisualizationMarkerNode::publishRouteMarker()
   if (!route_ || !waypoints_) {
     return;
   }
+  std::unordered_map<std::string, unsigned int> indexes;
+  for (unsigned int i = 0; i < waypoints_->waypoints.size(); ++i) {
+    indexes.emplace(waypoints_->waypoints[i].name, i);
+  }
   std::vector<unsigned int> matched_waypoint_indexes;
-
-  for (const auto & waypoint_name_on_route : route_->route) {
-    unsigned int matched_waypoint_index = 0;
-    for (const auto & waypoint : waypoints_->waypoints) {
-      if (waypoint_name_on_route == waypoint.name) {
-        break;
-      }
-      matched_waypoint_index++;
-    }
-    if (matched_waypoint_index >= waypoints_->waypoints.size()) {
-      RCLCPP_WARN_STREAM(
-        this->get_logger(), "Skipping routed waypoint name: " << waypoint_name_on_route);
-      continue;
-    }
-    matched_waypoint_indexes.push_back(matched_waypoint_index);
+  for (const auto & name : route_->route) {
+    const auto found = indexes.find(name);
+    if (found != indexes.end()) {matched_waypoint_indexes.push_back(found->second);}
   }
   auto route_marker_array_msg = std::make_unique<visualization_msgs::msg::MarkerArray>();
-
-  visualization_msgs::msg::Marker clear;
-  clear.action = visualization_msgs::msg::Marker::DELETEALL;
-  clear.header = waypoints_->header;
-  route_marker_array_msg->markers.push_back(clear);
 
   for (const auto & waypoint_index : matched_waypoint_indexes) {
     visualization_msgs::msg::Marker waypoint_name_merker_msg;
@@ -123,11 +113,24 @@ void NavWaypointVisualizationMarkerNode::publishRouteMarker()
   }
 
   int marker_id = 0;
-  for (auto && m : route_marker_array_msg->markers) {
+  for (auto & m : route_marker_array_msg->markers) {
     m.ns = "route_waypoint";
-    m.header = waypoints_->header;
-    m.id = marker_id;
-    marker_id++;
+    m.header.frame_id = waypoints_->header.frame_id;
+    m.id = marker_id++;
+  }
+  if (rendered_ && *route_marker_array_msg == last_rendered_) {return;}
+  const auto previous_size = last_rendered_.markers.size();
+  last_rendered_ = *route_marker_array_msg;
+  rendered_ = true;
+  // Keep a complete latched snapshot for RViz clients that join later.
+  // Delete only obsolete IDs instead of rebuilding everything with DELETEALL.
+  for (std::size_t i = route_marker_array_msg->markers.size(); i < previous_size; ++i) {
+    visualization_msgs::msg::Marker removed;
+    removed.ns = "route_waypoint";
+    removed.id = static_cast<int>(i);
+    removed.action = visualization_msgs::msg::Marker::DELETE;
+    removed.header.frame_id = waypoints_->header.frame_id;
+    route_marker_array_msg->markers.push_back(removed);
   }
   route_marker_publisher_->publish(std::move(route_marker_array_msg));
 }

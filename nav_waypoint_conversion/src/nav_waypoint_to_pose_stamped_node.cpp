@@ -37,6 +37,8 @@ public:
 
 private:
   std::string frame_id_;
+  bool publish_unchanged_goals_{true};
+  nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr last_goal_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_publisher_;
   rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr waypoint_subscription_;
 
@@ -53,6 +55,7 @@ NavWaypointToPoseStampedNode::NavWaypointToPoseStampedNode(const rclcpp::NodeOpt
   rcl_interfaces::msg::ParameterDescriptor descriptor;
   descriptor.read_only = true;
   frame_id_ = declare_parameter<std::string>("waypoint_frame_id", "map", descriptor);
+  publish_unchanged_goals_ = declare_parameter<bool>("publish_unchanged_goals", true, descriptor);
   if (frame_id_.empty()) {
     throw std::invalid_argument("waypoint_frame_id must not be empty");
   }
@@ -94,6 +97,13 @@ void NavWaypointToPoseStampedNode::waypointSubscribeCallback(
   }
   pose_msg->header.frame_id = waypoint_msg->frame_id.empty() ? frame_id_ : waypoint_msg->frame_id;
 
+  if (!publish_unchanged_goals_ && last_goal_ && last_goal_->name == waypoint_msg->name &&
+    last_goal_->pose == waypoint_msg->pose &&
+    (last_goal_->frame_id.empty() ? frame_id_ : last_goal_->frame_id) == pose_msg->header.frame_id)
+  {
+    return;
+  }
+  last_goal_ = waypoint_msg;
   pose_publisher_->publish(std::move(pose_msg));
 }
 }  // namespace nav_waypoint_conversion

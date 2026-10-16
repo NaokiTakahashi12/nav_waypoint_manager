@@ -75,6 +75,11 @@ def main():
                 raise RuntimeError('Timed out waiting for waypoint/route data')
             rclpy.spin_once(node, timeout_sec=0.05)
 
+    def retry_delay():
+        deadline = time.monotonic() + 0.1
+        while time.monotonic() < deadline:
+            rclpy.spin_once(node, timeout_sec=max(0.0, deadline - time.monotonic()))
+
     def call(service_type, name, request):
         client = node.create_client(service_type, name)
         try:
@@ -109,7 +114,7 @@ def main():
                     raise
                 if time.monotonic() >= deadline:
                     raise
-                rclpy.spin_once(node, timeout_sec=0.1)
+                retry_delay()
         wait_for(lambda: snapshots['route'].route == route.route)
 
     try:
@@ -157,27 +162,13 @@ def main():
             route = copy.deepcopy(snapshots['route'])
             route.route = [args.new_name if name == args.old_name else name
                            for name in route.route]
-            # Even an unreferenced rename requires a route update as a barrier for
-            # the route server to observe the newly registered waypoint snapshot.
-            set_route(route)
-            client = node.create_client(DeleteWaypoint, 'nav_waypoint_server/delete')
+            if args.old_name in snapshots['route'].route:
+                set_route(route)
             try:
-                if not client.wait_for_service(timeout_sec=5.0):
-                    raise RuntimeError('Delete service unavailable')
-                deadline = time.monotonic() + 5.0
-                while True:
-                    future = client.call_async(DeleteWaypoint.Request(name=args.old_name))
-                    rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
-                    if not future.done():
-                        raise RuntimeError('Delete service timed out')
-                    response = future.result()
-                    if response.success:
-                        break
-                    if time.monotonic() >= deadline:
-                        raise RuntimeError('New waypoint remains registered: ' + response.message)
-                    rclpy.spin_once(node, timeout_sec=0.1)
-            finally:
-                node.destroy_client(client)
+                call(DeleteWaypoint, 'nav_waypoint_server/delete',
+                     DeleteWaypoint.Request(name=args.old_name))
+            except RuntimeError as error:
+                raise RuntimeError('New waypoint remains registered: ' + str(error)) from error
         elif args.command == 'save':
             call(Trigger, 'nav_waypoint_server/save', Trigger.Request())
             call(Trigger, 'nav_route_server/save', Trigger.Request())

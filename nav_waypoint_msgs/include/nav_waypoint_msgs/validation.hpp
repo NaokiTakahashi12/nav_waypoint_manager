@@ -30,6 +30,13 @@
 
 namespace nav_waypoint_msgs
 {
+// Update timestamps do not change the meaning of a waypoint.
+inline bool sameWaypoint(const msg::Waypoint & a, const msg::Waypoint & b)
+{
+  return a.name == b.name && a.frame_id == b.frame_id &&
+         a.pose == b.pose && a.properties == b.properties;
+}
+
 inline double positiveNumber(const std::string & value)
 {
   std::size_t used = 0;

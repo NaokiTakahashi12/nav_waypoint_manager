@@ -1,3 +1,4 @@
+#include <unordered_map>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 
@@ -44,6 +45,7 @@ private:
   rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoints>::SharedPtr waypoints_subscriber_;
 
   nav_waypoint_msgs::msg::Waypoints::ConstSharedPtr last_waypoints_;
+  std::unordered_map<std::string, nav_waypoint_msgs::msg::Waypoint> waypoint_index_;
 
   interactive_markers::InteractiveMarkerServer interactive_marker_server_;
 };
@@ -87,25 +89,25 @@ void NavWaypointInteractiveMarkerNode::subscribeWaypointsCallback(
     RCLCPP_WARN(get_logger(), "Invalid markers: %s", e.what());
     return;
   }
-  if (last_waypoints_) {
-    for (const auto & old : last_waypoints_->waypoints) {
-      if (std::none_of(
-          msg->waypoints.begin(), msg->waypoints.end(),
-          [&old](const nav_waypoint_msgs::msg::Waypoint & w) {return old.name == w.name;}))
-      {
-        interactive_marker_server_.erase(old.name);
-      }
+  std::unordered_map<std::string, nav_waypoint_msgs::msg::Waypoint> incoming;
+  for (const auto & w : msg->waypoints) {
+    incoming.emplace(w.name, w);
+  }
+  bool changed = false;
+  for (const auto & old : waypoint_index_) {
+    if (!incoming.count(old.first)) {
+      interactive_marker_server_.erase(old.first);
+      changed = true;
     }
   }
-
   for (const auto & waypoint : msg->waypoints) {
+    const auto old = waypoint_index_.find(waypoint.name);
     if (last_waypoints_ && last_waypoints_->header.frame_id == msg->header.frame_id &&
-      std::any_of(
-        last_waypoints_->waypoints.begin(), last_waypoints_->waypoints.end(),
-        [&waypoint](const nav_waypoint_msgs::msg::Waypoint & old) {return old == waypoint;}))
+      old != waypoint_index_.end() && nav_waypoint_msgs::sameWaypoint(old->second, waypoint))
     {
       continue;
     }
+    changed = true;
     visualization_msgs::msg::InteractiveMarker interactive_marker_msg;
     visualization_msgs::msg::InteractiveMarkerControl waypoint_control;
     visualization_msgs::msg::InteractiveMarkerControl waypoint_orientation_control;
@@ -160,7 +162,8 @@ void NavWaypointInteractiveMarkerNode::subscribeWaypointsCallback(
         this,
         std::placeholders::_1));
   }
-  interactive_marker_server_.applyChanges();
+  if (changed) {interactive_marker_server_.applyChanges();}
+  waypoint_index_ = std::move(incoming);
   last_waypoints_ = msg;
 }
 
@@ -181,6 +184,7 @@ void NavWaypointInteractiveMarkerNode::feedbackWaypointCallback(
   if (found == last_waypoints_->waypoints.end()) {
     return;
   }
+  if (found->pose == feedback->pose) {return;}
   auto msg = std::make_unique<nav_waypoint_msgs::msg::Waypoint>(*found);
   msg->stamp = now();
   msg->frame_id = last_waypoints_->header.frame_id;
