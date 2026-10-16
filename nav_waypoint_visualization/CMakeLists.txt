@@ -23,7 +23,7 @@ ament_auto_add_library(${PROJECT_NAME}_components SHARED
   src/nav_waypoint_interactive_marker_node.cpp
 )
 target_link_libraries(${PROJECT_NAME}_components
- nav_waypoint_interactive_marker_node_params
+  nav_waypoint_interactive_marker_node_params
 )
 
 

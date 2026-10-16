@@ -29,7 +29,8 @@ private:
   nav_waypoint_msgs::msg::Route::ConstSharedPtr route_;
 };
 
-NavWaypointVisualizationMarkerNode::NavWaypointVisualizationMarkerNode(const rclcpp::NodeOptions & node_options)
+NavWaypointVisualizationMarkerNode::NavWaypointVisualizationMarkerNode(
+  const rclcpp::NodeOptions & node_options)
 : rclcpp::Node("nav_waypoint_visualization_maker", node_options),
   route_marker_publisher_(nullptr),
   waypoints_subscriber_(nullptr),
@@ -76,16 +77,18 @@ void NavWaypointVisualizationMarkerNode::publishRouteMarker()
       matched_waypoint_index++;
     }
     if (matched_waypoint_index >= waypoints_->waypoints.size()) {
-      RCLCPP_WARN_STREAM(this->get_logger(), "Skipping routed waypoint name: " << waypoint_name_on_route);
+      RCLCPP_WARN_STREAM(
+        this->get_logger(), "Skipping routed waypoint name: " << waypoint_name_on_route);
       continue;
     }
     matched_waypoint_indexes.push_back(matched_waypoint_index);
   }
-  if (matched_waypoint_indexes.size() < 1) {
-    RCLCPP_INFO(this->get_logger(), "Empty visualize waypoint route");
-    return;
-  }
   auto route_marker_array_msg = std::make_unique<visualization_msgs::msg::MarkerArray>();
+
+  visualization_msgs::msg::Marker clear;
+  clear.action = visualization_msgs::msg::Marker::DELETEALL;
+  clear.header = waypoints_->header;
+  route_marker_array_msg->markers.push_back(clear);
 
   for (const auto & waypoint_index : matched_waypoint_indexes) {
     visualization_msgs::msg::Marker waypoint_name_merker_msg;
@@ -115,7 +118,9 @@ void NavWaypointVisualizationMarkerNode::publishRouteMarker()
   route_line_marker_msg.color.g = 1.0;
   route_line_marker_msg.color.b = 0.5;
   route_line_marker_msg.color.a = 0.7;
-  route_marker_array_msg->markers.push_back(route_line_marker_msg);
+  if (matched_waypoint_indexes.size() >= 2) {
+    route_marker_array_msg->markers.push_back(route_line_marker_msg);
+  }
 
   int marker_id = 0;
   for (auto && m : route_marker_array_msg->markers) {
@@ -127,12 +132,9 @@ void NavWaypointVisualizationMarkerNode::publishRouteMarker()
   route_marker_publisher_->publish(std::move(route_marker_array_msg));
 }
 
-void NavWaypointVisualizationMarkerNode::subscribeWaypointsCallback(const nav_waypoint_msgs::msg::Waypoints::ConstSharedPtr & msg)
+void NavWaypointVisualizationMarkerNode::subscribeWaypointsCallback(
+  const nav_waypoint_msgs::msg::Waypoints::ConstSharedPtr & msg)
 {
-  if (msg->waypoints.size() < 1) {
-    RCLCPP_INFO(this->get_logger(), "Empty waypoints msg subscribed");
-    return;
-  }
   waypoints_ = msg;
 
   if (route_ && waypoints_) {
@@ -140,12 +142,9 @@ void NavWaypointVisualizationMarkerNode::subscribeWaypointsCallback(const nav_wa
   }
 }
 
-void NavWaypointVisualizationMarkerNode::subscribeRouteCallback(const nav_waypoint_msgs::msg::Route::ConstSharedPtr & msg)
+void NavWaypointVisualizationMarkerNode::subscribeRouteCallback(
+  const nav_waypoint_msgs::msg::Route::ConstSharedPtr & msg)
 {
-  if (msg->route.size() < 1) {
-    RCLCPP_INFO(this->get_logger(), "Empty route msg subscribed");
-    return;
-  }
   route_ = msg;
 
   if (waypoints_ && route_) {

@@ -18,6 +18,10 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#include <string>
+#include <stdexcept>
+#include <rcl_interfaces/msg/parameter_descriptor.hpp>
+#include <nav_waypoint_msgs/validation.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -32,10 +36,11 @@ public:
   ~NavWaypointToPoseStampedNode();
 
 private:
+  std::string frame_id_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_publisher_;
   rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr waypoint_subscription_;
 
-  void waypoitSubscribeCallback(const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr &);
+  void waypointSubscribeCallback(const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr &);
 };
 
 NavWaypointToPoseStampedNode::NavWaypointToPoseStampedNode(const rclcpp::NodeOptions & node_options)
@@ -45,6 +50,12 @@ NavWaypointToPoseStampedNode::NavWaypointToPoseStampedNode(const rclcpp::NodeOpt
   waypoint_subscription_(nullptr)
 {
   RCLCPP_INFO_STREAM(this->get_logger(), "Start initialize " << this->get_name());
+  rcl_interfaces::msg::ParameterDescriptor descriptor;
+  descriptor.read_only = true;
+  frame_id_ = declare_parameter<std::string>("waypoint_frame_id", "map", descriptor);
+  if (frame_id_.empty()) {
+    throw std::invalid_argument("waypoint_frame_id must not be empty");
+  }
 
   pose_publisher_ = this->create_publisher<geometry_msgs::msg::PoseStamped>(
     "~/output_pose",
@@ -54,7 +65,7 @@ NavWaypointToPoseStampedNode::NavWaypointToPoseStampedNode(const rclcpp::NodeOpt
     "~/input_waypoint",
     rclcpp::QoS(5),
     std::bind(
-      &NavWaypointToPoseStampedNode::waypoitSubscribeCallback,
+      &NavWaypointToPoseStampedNode::waypointSubscribeCallback,
       this,
       std::placeholders::_1
     )
@@ -67,7 +78,7 @@ NavWaypointToPoseStampedNode::~NavWaypointToPoseStampedNode()
   RCLCPP_INFO_STREAM(this->get_logger(), "Finish " << this->get_name());
 }
 
-void NavWaypointToPoseStampedNode::waypoitSubscribeCallback(
+void NavWaypointToPoseStampedNode::waypointSubscribeCallback(
   const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr & waypoint_msg)
 {
   geometry_msgs::msg::PoseStamped::UniquePtr pose_msg;
@@ -75,7 +86,13 @@ void NavWaypointToPoseStampedNode::waypoitSubscribeCallback(
   pose_msg = std::make_unique<geometry_msgs::msg::PoseStamped>();
   pose_msg->pose = waypoint_msg->pose;
   pose_msg->header.stamp = waypoint_msg->stamp;
-  pose_msg->header.frame_id = "map";
+  try {
+    nav_waypoint_msgs::validateWaypoint(*waypoint_msg, frame_id_);
+  } catch (const std::exception & e) {
+    RCLCPP_WARN(get_logger(), "Rejected waypoint: %s", e.what());
+    return;
+  }
+  pose_msg->header.frame_id = waypoint_msg->frame_id.empty() ? frame_id_ : waypoint_msg->frame_id;
 
   pose_publisher_->publish(std::move(pose_msg));
 }

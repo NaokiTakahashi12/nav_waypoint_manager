@@ -1,26 +1,317 @@
 waypoint_manager:
   waypoints:
-    wp_1700242891_0:
+    test_wp_0:
       pose:
         position:
-          x: 83.766281127929688
-          y: -10.806978225708008
+          x: 1
+          y: 0
           z: 0
         orientation:
           x: 0
           y: 0
-          z: -0.0071423468689351009
-          w: 0.99997449311530129
-      properties: ~
-    wp_1700242900_1:
+          z: 0
+          w: 1
+      properties:
+        stop_with_resume: false
+        goal_reached_radius: 2.0
+    test_wp_1:
       pose:
         position:
-          x: 102.29119873046875
-          y: -35.335342407226562
+          x: 1
+          y: 2
           z: 0
         orientation:
           x: 0
           y: 0
-          z: -0.1759312110148834
-          w: 0.98440246291384126
+          z: 0
+          w: 1
+      properties:
+        stop_with_resume: true
+        goal_reached_radius: 0.25
+    test_wp_2:
+      pose:
+        position:
+          x: 4
+          y: 1
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: 0
+          w: 1
       properties: ~
+    wp_1733591436_0:
+      pose:
+        position:
+          x: 84.157066345214844
+          y: -5.0935239791870117
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: 0.019586269985112703
+          w: 0.99980817061477867
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591443_1:
+      pose:
+        position:
+          x: 84.85955810546875
+          y: -22.378778457641602
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.70667030130007669
+          w: 0.707542991810716
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591449_2:
+      pose:
+        position:
+          x: 98.58660888671875
+          y: -22.940715789794922
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.03120465102490428
+          w: 0.99951301630064526
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591458_3:
+      pose:
+        position:
+          x: 101.70472717285156
+          y: -25.889753341674805
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.70718707573425499
+          w: 0.70702647752006653
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591468_4:
+      pose:
+        position:
+          x: 122.64742279052734
+          y: -30.783119201660156
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: 0.014605509926889774
+          w: 0.99989333385105406
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591483_5:
+      pose:
+        position:
+          x: 136.7947998046875
+          y: -27.909835815429688
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.72233815031754534
+          w: 0.69154001807258214
+      properties:
+        goal_reached_radius: 3.0
+    wp_1733591495_6:
+      pose:
+        position:
+          x: 134.79649353027344
+          y: -36.121910095214844
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.69002474018605386
+          w: 0.72378578179677511
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591504_7:
+      pose:
+        position:
+          x: 135.50798034667969
+          y: -64.180763244628906
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.69925799082036288
+          w: 0.71486940225041751
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591521_8:
+      pose:
+        position:
+          x: 135.77827453613281
+          y: -98.762367248535156
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.69482099900360672
+          w: 0.71918271624367469
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591538_9:
+      pose:
+        position:
+          x: 129.0045166015625
+          y: -101.96417236328125
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.99999999952679675
+          w: 3.0763723373721698e-05
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591544_10:
+      pose:
+        position:
+          x: 117.04375457763672
+          y: -98.886009216308594
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: 0.99987788456234583
+          w: 0.015627410634144009
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591565_11:
+      pose:
+        position:
+          x: 96.3914794921875
+          y: -99.1417236328125
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.99994342659398705
+          w: 0.010636898583489198
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591578_12:
+      pose:
+        position:
+          x: 71.928672790527344
+          y: -98.882637023925781
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.99991573818014678
+          w: 0.012981392053707826
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591588_13:
+      pose:
+        position:
+          x: 49.534324645996094
+          y: -99.875686645507812
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.70612417223113422
+          w: 0.70808802658348591
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591605_14:
+      pose:
+        position:
+          x: 35.1343994140625
+          y: -102.30522155761719
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.99993828060364343
+          w: 0.011110129766543891
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591611_15:
+      pose:
+        position:
+          x: 31.92852783203125
+          y: -97.276634216308594
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: 0.74648555786427118
+          w: 0.66540161699538114
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591623_16:
+      pose:
+        position:
+          x: 30.447490692138672
+          y: -60.995288848876953
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: 0.71513707236632285
+          w: 0.69898423997063397
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591633_17:
+      pose:
+        position:
+          x: 23.198949813842773
+          y: -35.328319549560547
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: 0.98151697146361805
+          w: 0.19137511522893189
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591645_18:
+      pose:
+        position:
+          x: -1.795194149017334
+          y: -33.995689392089844
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.97267017274322276
+          w: 0.23219116058900505
+      properties:
+        goal_reached_radius: 1.0
+        stop_with_resume: true
+    wp_1733591656_19:
+      pose:
+        position:
+          x: -18.633993148803711
+          y: -42.522960662841797
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.99840204589946591
+          w: 0.056509775647765277
+      properties:
+        goal_reached_radius: 1.0
+    wp_1733591667_20:
+      pose:
+        position:
+          x: -36.800186157226562
+          y: -41.466625213623047
+          z: 0
+        orientation:
+          x: 0
+          y: 0
+          z: -0.99997777922727238
+          w: 0.0066664122054165094
+      properties:
+        goal_reached_radius: 1.0
+        stop_with_resume: true

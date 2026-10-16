@@ -1,0 +1,5 @@
+# Register or replace a waypoint, including all of its properties.
+nav_waypoint_msgs/Waypoint waypoint
+---
+bool success
+string message

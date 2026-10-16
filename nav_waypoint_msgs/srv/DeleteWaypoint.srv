@@ -1,0 +1,5 @@
+# Referenced waypoints must first be removed from the route.
+string name
+---
+bool success
+string message

@@ -1,5 +1,9 @@
 #include <tf2/LinearMath/Quaternion.h>
+#include <tf2/LinearMath/Matrix3x3.h>
 
+#include <algorithm>
+#include <cmath>
+#include <nav_waypoint_msgs/validation.hpp>
 #include <string>
 #include <memory>
 #include <functional>
@@ -25,9 +29,9 @@ public:
   NavWaypointInteractiveMarkerNode(const rclcpp::NodeOptions &);
 
 private:
-  // rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr waypoints_marker_publisher_;
   void subscribeWaypointsCallback(const nav_waypoint_msgs::msg::Waypoints::ConstSharedPtr &);
-  void feedbackWaypointCallback(const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr &);
+  void feedbackWaypointCallback(
+    const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr &);
   void setArrowMarker(visualization_msgs::msg::InteractiveMarkerControl &);
   void setFlagMarkerFromProperties(
     visualization_msgs::msg::InteractiveMarkerControl &,
@@ -44,7 +48,8 @@ private:
   interactive_markers::InteractiveMarkerServer interactive_marker_server_;
 };
 
-NavWaypointInteractiveMarkerNode::NavWaypointInteractiveMarkerNode(const rclcpp::NodeOptions & node_options)
+NavWaypointInteractiveMarkerNode::NavWaypointInteractiveMarkerNode(
+  const rclcpp::NodeOptions & node_options)
 : rclcpp::Node("nav_waypoint_interactive_marker", node_options),
   param_listener_(this->get_node_parameters_interface()),
   params_(param_listener_.get_params()),
@@ -70,14 +75,37 @@ NavWaypointInteractiveMarkerNode::NavWaypointInteractiveMarkerNode(const rclcpp:
   RCLCPP_INFO(this->get_logger(), "Initialize successful");
 }
 
-void NavWaypointInteractiveMarkerNode::subscribeWaypointsCallback(const nav_waypoint_msgs::msg::Waypoints::ConstSharedPtr & msg)
+void NavWaypointInteractiveMarkerNode::subscribeWaypointsCallback(
+  const nav_waypoint_msgs::msg::Waypoints::ConstSharedPtr & msg)
 {
-  if (msg->waypoints.size() <= 0) {
+  try {
+    nav_waypoint_msgs::validateWaypoints(*msg, msg->header.frame_id);
+    if (msg->header.frame_id.empty()) {
+      throw std::invalid_argument("Empty waypoint frame");
+    }
+  } catch (const std::exception & e) {
+    RCLCPP_WARN(get_logger(), "Invalid markers: %s", e.what());
     return;
   }
-  interactive_marker_server_.clear();
+  if (last_waypoints_) {
+    for (const auto & old : last_waypoints_->waypoints) {
+      if (std::none_of(
+          msg->waypoints.begin(), msg->waypoints.end(),
+          [&old](const nav_waypoint_msgs::msg::Waypoint & w) {return old.name == w.name;}))
+      {
+        interactive_marker_server_.erase(old.name);
+      }
+    }
+  }
 
   for (const auto & waypoint : msg->waypoints) {
+    if (last_waypoints_ && last_waypoints_->header.frame_id == msg->header.frame_id &&
+      std::any_of(
+        last_waypoints_->waypoints.begin(), last_waypoints_->waypoints.end(),
+        [&waypoint](const nav_waypoint_msgs::msg::Waypoint & old) {return old == waypoint;}))
+    {
+      continue;
+    }
     visualization_msgs::msg::InteractiveMarker interactive_marker_msg;
     visualization_msgs::msg::InteractiveMarkerControl waypoint_control;
     visualization_msgs::msg::InteractiveMarkerControl waypoint_orientation_control;
@@ -88,17 +116,27 @@ void NavWaypointInteractiveMarkerNode::subscribeWaypointsCallback(const nav_wayp
     interactive_marker_msg.pose = waypoint.pose;
 
     if (params_.interactive_xy_only) {
-      waypoint_control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_PLANE;
-      waypoint_orientation_control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
+      waypoint_control.interaction_mode =
+        visualization_msgs::msg::InteractiveMarkerControl::MOVE_PLANE;
+      waypoint_orientation_control.interaction_mode =
+        visualization_msgs::msg::InteractiveMarkerControl::ROTATE_AXIS;
       interactive_marker_msg.pose.position.z = 0.0;
-      interactive_marker_msg.pose.orientation.x = 0.0;
-      interactive_marker_msg.pose.orientation.y = 0.0;
+      tf2::Quaternion q;
+      tf2::fromMsg(waypoint.pose.orientation, q);
+      tf2::Matrix3x3 rotation(q);
+      double roll, pitch, yaw;
+      rotation.getRPY(roll, pitch, yaw);
+      q.setRPY(0.0, 0.0, yaw);
+      interactive_marker_msg.pose.orientation = tf2::toMsg(q);
     } else {
-      waypoint_control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::MOVE_3D;
-      waypoint_orientation_control.interaction_mode = visualization_msgs::msg::InteractiveMarkerControl::ROTATE_3D;
+      waypoint_control.interaction_mode =
+        visualization_msgs::msg::InteractiveMarkerControl::MOVE_3D;
+      waypoint_orientation_control.interaction_mode =
+        visualization_msgs::msg::InteractiveMarkerControl::ROTATE_3D;
     }
     waypoint_control.orientation_mode = visualization_msgs::msg::InteractiveMarkerControl::INHERIT;
-    waypoint_orientation_control.orientation_mode = visualization_msgs::msg::InteractiveMarkerControl::INHERIT;
+    waypoint_orientation_control.orientation_mode =
+      visualization_msgs::msg::InteractiveMarkerControl::INHERIT;
 
     tf2::Quaternion orientation(0, 1, 0, 1);
     orientation.normalize();
@@ -126,29 +164,35 @@ void NavWaypointInteractiveMarkerNode::subscribeWaypointsCallback(const nav_wayp
   last_waypoints_ = msg;
 }
 
-void NavWaypointInteractiveMarkerNode::feedbackWaypointCallback(const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr & feedback)
+void NavWaypointInteractiveMarkerNode::feedbackWaypointCallback(
+  const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr & feedback)
 {
-  static bool last_mouse_point_valid = true;
-
-  if (feedback->mouse_point_valid && !last_mouse_point_valid) {
-    auto msg = std::make_unique<nav_waypoint_msgs::msg::Waypoint>();
-
-    msg->stamp = this->get_clock()->now();
-    msg->name = feedback->marker_name;
-    msg->pose = feedback->pose;
-
-    for (const auto & lw : last_waypoints_->waypoints) {
-      if (msg->name == lw.name) {
-        msg->properties = lw.properties;
-        break;
-      }
-    }
-    modify_waypoint_publisher_->publish(std::move(msg));
-    interactive_marker_server_.setPose(feedback->marker_name, feedback->pose);
-    interactive_marker_server_.applyChanges();
+  if (!last_waypoints_ ||
+    feedback->event_type != visualization_msgs::msg::InteractiveMarkerFeedback::MOUSE_UP ||
+    feedback->header.frame_id != last_waypoints_->header.frame_id)
+  {
+    return;
   }
-
-  last_mouse_point_valid = feedback->mouse_point_valid;
+  const auto found = std::find_if(
+    last_waypoints_->waypoints.begin(), last_waypoints_->waypoints.end(),
+    [&feedback](const nav_waypoint_msgs::msg::Waypoint & w) {
+      return w.name == feedback->marker_name;
+    });
+  if (found == last_waypoints_->waypoints.end()) {
+    return;
+  }
+  auto msg = std::make_unique<nav_waypoint_msgs::msg::Waypoint>(*found);
+  msg->stamp = now();
+  msg->frame_id = last_waypoints_->header.frame_id;
+  msg->pose = feedback->pose;
+  try {
+    nav_waypoint_msgs::validateWaypoint(*msg, msg->frame_id);
+    modify_waypoint_publisher_->publish(std::move(msg));
+  } catch (const std::exception & e) {
+    RCLCPP_WARN(get_logger(), "Invalid marker pose: %s", e.what());
+    interactive_marker_server_.setPose(feedback->marker_name, found->pose);
+  }
+  interactive_marker_server_.applyChanges();
 }
 
 void NavWaypointInteractiveMarkerNode::setArrowMarker(
@@ -180,7 +224,7 @@ void NavWaypointInteractiveMarkerNode::setFlagMarkerFromProperties(
 
   for (const auto & p : properties) {
     if ("goal_reached_radius" == p.key) {
-      goal_reached_radius = std::stof(p.value);
+      goal_reached_radius = nav_waypoint_msgs::positiveNumber(p.value);
     } else if ("stop_with_resume" == p.key) {
       if ("true" == p.value) {
         stop_with_resume = true;

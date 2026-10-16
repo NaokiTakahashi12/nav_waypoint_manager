@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+# Copyright (c) 2026 Naoki Takahashi
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+"""Edit waypoint data and route order without depending on a navigation backend."""
+
+import argparse
+import copy
+import math
+import sys
+import time
+
+import rclpy
+from rclpy.qos import DurabilityPolicy, QoSProfile
+from nav_waypoint_msgs.msg import Property, Route, Waypoint, Waypoints
+from nav_waypoint_msgs.srv import DeleteWaypoint, SetRoute, UpsertWaypoint
+from std_srvs.srv import Trigger
+
+
+def parser():
+    result = argparse.ArgumentParser(description=__doc__)
+    result.add_argument('--namespace', default='')
+    commands = result.add_subparsers(dest='command', required=True)
+    edit = commands.add_parser('upsert', help='Create or edit position, yaw and properties')
+    edit.add_argument('name')
+    edit.add_argument('--position', type=float, nargs=3, metavar=('X', 'Y', 'Z'))
+    edit.add_argument('--yaw', type=float, help='Planar heading in radians')
+    edit.add_argument('--property', action='append', default=[], metavar='KEY=VALUE')
+    edit.add_argument('--remove-property', action='append', default=[], metavar='KEY')
+    route = commands.add_parser('set-route', help='Replace visit order and wait for a new start')
+    route.add_argument('names', nargs='*')
+    delete = commands.add_parser('delete')
+    delete.add_argument('name')
+    rename = commands.add_parser('rename', help='Register new name, update route, delete old name')
+    rename.add_argument('old_name')
+    rename.add_argument('new_name')
+    commands.add_parser('save', help='Save waypoints and route to their configured destinations')
+    return result
+
+
+def main():
+    args = parser().parse_args()
+    rclpy.init()
+    node = rclpy.create_node('waypoint_edit', namespace=args.namespace)
+    snapshots = {}
+    qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+    subscriptions = [
+        node.create_subscription(Waypoints, 'nav_waypoint_server/waypoints',
+                                 lambda msg: snapshots.update(waypoints=msg), qos),
+        node.create_subscription(Route, 'nav_route_server/route',
+                                 lambda msg: snapshots.update(route=msg), qos),
+    ]
+
+    def wait_for(condition):
+        deadline = time.monotonic() + 5.0
+        while not condition():
+            if time.monotonic() >= deadline:
+                raise RuntimeError('Timed out waiting for waypoint/route data')
+            rclpy.spin_once(node, timeout_sec=0.05)
+
+    def call(service_type, name, request):
+        client = node.create_client(service_type, name)
+        try:
+            if not client.wait_for_service(timeout_sec=5.0):
+                raise RuntimeError('Service unavailable: ' + name)
+            future = client.call_async(request)
+            rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
+            if not future.done():
+                raise RuntimeError('Service timed out: ' + name)
+            response = future.result()
+            if not response.success:
+                raise RuntimeError(name + ': ' + response.message)
+            return response
+        finally:
+            node.destroy_client(client)
+
+    def set_route(route):
+        known = {w.name for w in snapshots['waypoints'].waypoints}
+        missing = [name for name in route.route if name not in known]
+        if missing:
+            raise ValueError('Unknown route waypoint: ' + missing[0])
+        deadline = time.monotonic() + 5.0
+        while True:
+            try:
+                call(SetRoute, 'nav_route_server/set_route', SetRoute.Request(route=route))
+                break
+            except RuntimeError as error:
+                # DDS delivery of a just-registered waypoint may lag behind the
+                # service response. Retry only a definite validation rejection.
+                if ('Unknown route waypoint:' not in str(error) and
+                        'Waypoints have not been received' not in str(error)):
+                    raise
+                if time.monotonic() >= deadline:
+                    raise
+                rclpy.spin_once(node, timeout_sec=0.1)
+        wait_for(lambda: snapshots['route'].route == route.route)
+
+    try:
+        wait_for(lambda: 'waypoints' in snapshots and 'route' in snapshots)
+        waypoints = {w.name: w for w in snapshots['waypoints'].waypoints}
+        frame = snapshots['waypoints'].header.frame_id
+        if args.command == 'upsert':
+            w = copy.deepcopy(waypoints.get(args.name, Waypoint(name=args.name)))
+            if args.name not in waypoints:
+                if args.position is None:
+                    raise ValueError('A new waypoint requires --position X Y Z')
+                w.pose.orientation.w = 1.0
+            w.frame_id = frame
+            if args.position is not None:
+                w.pose.position.x, w.pose.position.y, w.pose.position.z = args.position
+            if args.yaw is not None:
+                w.pose.orientation.x = w.pose.orientation.y = 0.0
+                w.pose.orientation.z = math.sin(args.yaw / 2.0)
+                w.pose.orientation.w = math.cos(args.yaw / 2.0)
+            properties = {p.key: p.value for p in w.properties}
+            for key in args.remove_property:
+                properties.pop(key, None)
+            for item in args.property:
+                key, separator, value = item.partition('=')
+                if not separator or not key:
+                    raise ValueError('--property requires KEY=VALUE')
+                properties[key] = value
+            w.properties = [Property(key=k, value=v) for k, v in properties.items()]
+            call(UpsertWaypoint, 'nav_waypoint_server/upsert', UpsertWaypoint.Request(waypoint=w))
+        elif args.command == 'set-route':
+            set_route(Route(header=snapshots['route'].header, route=args.names))
+        elif args.command == 'delete':
+            call(DeleteWaypoint, 'nav_waypoint_server/delete',
+                 DeleteWaypoint.Request(name=args.name))
+        elif args.command == 'rename':
+            if args.old_name not in waypoints:
+                raise ValueError('Unknown waypoint: ' + args.old_name)
+            if not args.new_name or args.new_name in waypoints:
+                raise ValueError('New name must be nonempty and unused')
+            w = copy.deepcopy(waypoints[args.old_name])
+            w.name = args.new_name
+            call(UpsertWaypoint, 'nav_waypoint_server/upsert', UpsertWaypoint.Request(waypoint=w))
+            wait_for(lambda: any(w.name == args.new_name
+                                 for w in snapshots['waypoints'].waypoints))
+            route = copy.deepcopy(snapshots['route'])
+            route.route = [args.new_name if name == args.old_name else name
+                           for name in route.route]
+            # Even an unreferenced rename requires a route update as a barrier for
+            # the route server to observe the newly registered waypoint snapshot.
+            set_route(route)
+            client = node.create_client(DeleteWaypoint, 'nav_waypoint_server/delete')
+            try:
+                if not client.wait_for_service(timeout_sec=5.0):
+                    raise RuntimeError('Delete service unavailable')
+                deadline = time.monotonic() + 5.0
+                while True:
+                    future = client.call_async(DeleteWaypoint.Request(name=args.old_name))
+                    rclpy.spin_until_future_complete(node, future, timeout_sec=5.0)
+                    if not future.done():
+                        raise RuntimeError('Delete service timed out')
+                    response = future.result()
+                    if response.success:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('New waypoint remains registered: ' + response.message)
+                    rclpy.spin_once(node, timeout_sec=0.1)
+            finally:
+                node.destroy_client(client)
+        elif args.command == 'save':
+            call(Trigger, 'nav_waypoint_server/save', Trigger.Request())
+            call(Trigger, 'nav_route_server/save', Trigger.Request())
+        print('Done: ' + args.command)
+        return 0
+    except (RuntimeError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    finally:
+        for subscription in subscriptions:
+            node.destroy_subscription(subscription)
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    sys.exit(main())

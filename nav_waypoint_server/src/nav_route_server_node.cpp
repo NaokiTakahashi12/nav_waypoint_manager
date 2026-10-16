@@ -18,367 +18,315 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#include <tf2/exceptions.h>
-#include <tf2_ros/transform_broadcaster.h>
-#include <tf2_ros/transform_listener.h>
 #include <tf2_ros/buffer.h>
-#include <yaml-cpp/yaml.h>
-#include <Eigen/Dense>
-#include <Eigen/Geometry>
+#include <tf2_ros/transform_listener.h>
 
-#include <memory>
-#include <fstream>
-#include <string>
-#include <vector>
+#include <algorithm>
 #include <chrono>
-#include <functional>
-#include <mutex>
-#include <thread>
+#include <cmath>
+#include <memory>
+#include <stdexcept>
+#include <string>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
-#include <tf2_eigen/tf2_eigen.hpp>
 #include <std_msgs/msg/bool.hpp>
-#include <nav_waypoint_msgs/msg/waypoint.hpp>
-#include <nav_waypoint_msgs/msg/waypoints.hpp>
-#include <nav_waypoint_msgs/msg/route.hpp>
 #include <std_srvs/srv/empty.hpp>
+#include <std_srvs/srv/trigger.hpp>
+#include <nav_waypoint_msgs/msg/route.hpp>
+#include <nav_waypoint_msgs/msg/route_progress.hpp>
+#include <nav_waypoint_msgs/srv/set_route.hpp>
+#include <nav_waypoint_msgs/validation.hpp>
+#include <nav_waypoint_server/nav_route_server_node_params.hpp>
 
-#include <nav_route_server_node_params.hpp>
+#include "dataset_io.hpp"
 
 namespace nav_waypoint_server
 {
 class NavRouteServer : public rclcpp::Node
 {
 public:
-  explicit NavRouteServer(const rclcpp::NodeOptions &);
-  ~NavRouteServer();
+  explicit NavRouteServer(const rclcpp::NodeOptions & options)
+  : Node("nav_route_server", rclcpp::NodeOptions(options).use_intra_process_comms(false))
+  {
+    param_listener_ = std::make_unique<nav_route_server::ParamListener>(
+      get_node_parameters_interface());
+    params_ = param_listener_->get_params();
+    if (params_.waypoint_frame_id.empty() || params_.robot_frame_id.empty() ||
+      !std::isfinite(params_.reach_observe_frequency) || params_.reach_observe_frequency <= 0.0 ||
+      params_.reach_observe_frequency > 1000.0 ||
+      1.0 / params_.reach_observe_frequency >=
+      std::chrono::duration<double>(std::chrono::nanoseconds::max()).count() ||
+      !std::isfinite(params_.reach_position_threshold) || params_.reach_position_threshold <= 0.0 ||
+      params_.publish_goal_with_reach_observe < 0)
+    {
+      throw std::invalid_argument(
+              "Invalid frame, observation frequency, radius or publish interval");
+    }
+    route_.header.frame_id = params_.waypoint_frame_id;
+    if (fileExists(params_.route_file)) {
+      const auto root = loadDataset(params_.route_file, params_.waypoint_frame_id);
+      const auto entries = root["waypoint_manager"]["route"];
+      if (!entries || !entries.IsSequence()) {
+        throw std::invalid_argument("route must be a sequence");
+      }
+      for (const auto & entry : entries) {
+        const auto name = entry.as<std::string>();
+        if (name.empty()) {
+          throw std::invalid_argument("Route waypoint names must not be empty");
+        }
+        route_.route.push_back(name);
+      }
+    } else {
+      RCLCPP_WARN(get_logger(), "Starting with an empty route: %s", params_.route_file.c_str());
+    }
+    route_index_ = params_.route_index_auto_reset ? 0 : -1;
+    tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
+    tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
+    goal_publisher_ = create_publisher<nav_waypoint_msgs::msg::Waypoint>("~/waypoint", 2);
+    route_publisher_ = create_publisher<nav_waypoint_msgs::msg::Route>(
+      "~/route", rclcpp::QoS(1).transient_local());
+    progress_publisher_ = create_publisher<nav_waypoint_msgs::msg::RouteProgress>(
+      "~/progress", rclcpp::QoS(1).transient_local());
+    waypoint_subscription_ = create_subscription<nav_waypoint_msgs::msg::Waypoints>(
+      "nav_waypoint_server/waypoints", rclcpp::QoS(1).transient_local(),
+      [this](nav_waypoint_msgs::msg::Waypoints::ConstSharedPtr ws) {
+        try {
+          nav_waypoint_msgs::validateWaypoints(*ws, params_.waypoint_frame_id);
+          waypoints_ = ws;
+          publish_goal_index_ = 0;  // Apply edits without changing route progress.
+        } catch (const std::exception & e) {
+          // Do not continue using an old dataset after receiving an invalid replacement.
+          waypoints_.reset();
+          setProgress("blocked", e.what());
+        }
+      });
+    reset_service_ = create_service<std_srvs::srv::Empty>(
+      "~/reset", [this](std_srvs::srv::Empty::Request::ConstSharedPtr,
+      std_srvs::srv::Empty::Response::SharedPtr) {reset();});
+    resume_subscription_ = create_subscription<std_msgs::msg::Bool>(
+      "~/release_resume", 3, [this](std_msgs::msg::Bool::ConstSharedPtr msg) {
+        // Commands received while moving do not release a future waypoint.
+        if (msg->data && (startup_wait_ || waiting_resume_)) {
+          resume_pending_ = true;
+        }
+      });
+    set_route_service_ = create_service<nav_waypoint_msgs::srv::SetRoute>(
+      "~/set_route", [this](nav_waypoint_msgs::srv::SetRoute::Request::ConstSharedPtr request,
+      nav_waypoint_msgs::srv::SetRoute::Response::SharedPtr response) {
+        try {
+          if (!request->route.header.frame_id.empty() &&
+          request->route.header.frame_id != params_.waypoint_frame_id)
+          {
+            throw std::invalid_argument("Route frame mismatch");
+          }
+          validateRoute(request->route);
+          route_ = request->route;
+          route_.header.frame_id = params_.waypoint_frame_id;
+          publishRoute();
+          reset();
+          response->success = true;
+          response->message = "Route replaced; release_resume is required to start";
+        } catch (const std::exception & e) {
+          response->message = e.what();
+        }
+      });
+    save_service_ = create_service<std_srvs::srv::Trigger>(
+      "~/save", [this](std_srvs::srv::Trigger::Request::ConstSharedPtr,
+      std_srvs::srv::Trigger::Response::SharedPtr response) {
+        try {
+          validateRoute(route_);
+          const auto path = params_.route_save_file.empty() ?
+          params_.route_file : params_.route_save_file;
+          auto root = outputDataset(path, params_.waypoint_frame_id);
+          YAML::Node entries(YAML::NodeType::Sequence);
+          for (const auto & name : route_.route) {
+            entries.push_back(name);
+          }
+          root["waypoint_manager"]["route"] = entries;
+          atomicSave(path, root);
+          response->success = true;
+          response->message = "Saved route";
+        } catch (const std::exception & e) {
+          response->message = e.what();
+          RCLCPP_ERROR(get_logger(), "Save failed: %s", e.what());
+        }
+      });
+    const auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::duration<double>(1.0 / params_.reach_observe_frequency));
+    timer_ = create_wall_timer(duration, [this]() {observe();});
+    publishRoute();
+    setProgress(route_index_ < 0 ? "disabled" : "startup_wait", "");
+  }
 
 private:
-  const int route_reset_index_;
-  int route_index_;
-  int publish_goal_index_;
-  bool release_resume_state_;
-
-  std::mutex waypoints_mutex_;
-  std::mutex route_index_mutex_;
-
-  rclcpp::Publisher<nav_waypoint_msgs::msg::Waypoint>::SharedPtr waypoint_publisher_;
-  rclcpp::Publisher<nav_waypoint_msgs::msg::Route>::SharedPtr route_publisher_;
-  rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoints>::SharedPtr waypoints_subscriber_;
-  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr release_resume_subscriber_;
-  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr reset_route_service_;
-  rclcpp::TimerBase::SharedPtr reach_waypoint_observer_timer_;
-
-  std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
-  std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
-
+  int route_index_{0};
+  int64_t publish_goal_index_{0};
+  bool startup_wait_{true};
+  bool waiting_resume_{false};
+  bool resume_pending_{false};
   nav_waypoint_msgs::msg::Route route_;
   nav_waypoint_msgs::msg::Waypoints::ConstSharedPtr waypoints_;
-
+  nav_waypoint_msgs::msg::RouteProgress progress_;
   std::unique_ptr<nav_route_server::ParamListener> param_listener_;
   nav_route_server::Params params_;
+  std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
+  rclcpp::Publisher<nav_waypoint_msgs::msg::Waypoint>::SharedPtr goal_publisher_;
+  rclcpp::Publisher<nav_waypoint_msgs::msg::Route>::SharedPtr route_publisher_;
+  rclcpp::Publisher<nav_waypoint_msgs::msg::RouteProgress>::SharedPtr progress_publisher_;
+  rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoints>::SharedPtr waypoint_subscription_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr resume_subscription_;
+  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr reset_service_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_service_;
+  rclcpp::Service<nav_waypoint_msgs::srv::SetRoute>::SharedPtr set_route_service_;
+  rclcpp::TimerBase::SharedPtr timer_;
 
-  void waypointsSubscribeCallback(const nav_waypoint_msgs::msg::Waypoints::ConstSharedPtr &);
-  void resetRouteServiceCallback(
-    const std_srvs::srv::Empty::Request::ConstSharedPtr &,
-    const std_srvs::srv::Empty::Response::SharedPtr &);
-  void releaseResumeCallback(const std_msgs::msg::Bool::ConstSharedPtr &);
-  void reachWaypointObserverCallback();
-
-  void publishRoute();
-  void publishLatestWaypoint(const int waypoint_index);
-  nav_waypoint_msgs::msg::Route loadRoute(const std::string & file_path);
-  bool isLoadableRoute(const std::string & file_path);
-};
-
-NavRouteServer::NavRouteServer(const rclcpp::NodeOptions & node_options)
-: rclcpp::Node("nav_route_server",
-    rclcpp::NodeOptions(node_options).use_intra_process_comms(false)),
-  route_reset_index_(-1),
-  route_index_(route_reset_index_),
-  publish_goal_index_(0),
-  release_resume_state_(false),
-  waypoint_publisher_(nullptr),
-  route_publisher_(nullptr),
-  waypoints_subscriber_(nullptr),
-  release_resume_subscriber_(nullptr),
-  reset_route_service_(nullptr),
-  reach_waypoint_observer_timer_(nullptr),
-  tf_listener_(nullptr),
-  tf_buffer_(nullptr),
-  waypoints_(nullptr),
-  param_listener_(nullptr),
-  params_()
-{
-  RCLCPP_INFO_STREAM(this->get_logger(), "Start initialize " << this->get_name());
-
-  param_listener_ = std::make_unique<nav_route_server::ParamListener>(
-    this->get_node_parameters_interface()
-  );
-  params_ = param_listener_->get_params();
-
-  if (isLoadableRoute(params_.route_file)) {
-    route_ = loadRoute(params_.route_file);
-  } else {
-    RCLCPP_WARN_STREAM(this->get_logger(), "Can't open route file: " << params_.route_file);
-  }
-  route_.header.stamp = this->get_clock()->now();
-  route_.header.frame_id = params_.waypoint_frame_id;
-
-  if (params_.route_index_auto_reset) {
-    route_index_ = 0;
-  }
-
-  tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
-  tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
-
-  waypoint_publisher_ = this->create_publisher<nav_waypoint_msgs::msg::Waypoint>(
-    "~/waypoint",
-    rclcpp::QoS(2)
-  );
-  route_publisher_ = this->create_publisher<nav_waypoint_msgs::msg::Route>(
-    "~/route",
-    rclcpp::QoS(5).transient_local()
-  );
-  waypoints_subscriber_ = this->create_subscription<nav_waypoint_msgs::msg::Waypoints>(
-    "nav_waypoint_server/waypoints",
-    rclcpp::QoS(5).transient_local(),
-    std::bind(
-      &NavRouteServer::waypointsSubscribeCallback,
-      this,
-      std::placeholders::_1
-    )
-  );
-  reset_route_service_ = this->create_service<std_srvs::srv::Empty>(
-    "~/reset",
-    std::bind(
-      &NavRouteServer::resetRouteServiceCallback,
-      this,
-      std::placeholders::_1,
-      std::placeholders::_2
-    )
-  );
-  release_resume_subscriber_ = this->create_subscription<std_msgs::msg::Bool>(
-    "~/release_resume",
-    rclcpp::QoS(3),
-    std::bind(
-      &NavRouteServer::releaseResumeCallback,
-      this,
-      std::placeholders::_1
-    )
-  );
-  const unsigned int reach_waypoint_observer_duration_milliseconds =
-    1e3 / params_.reach_observe_frequency;
-  reach_waypoint_observer_timer_ = this->create_wall_timer(
-    std::chrono::milliseconds(reach_waypoint_observer_duration_milliseconds),
-    std::bind(
-      &NavRouteServer::reachWaypointObserverCallback,
-      this
-    )
-  );
-  RCLCPP_INFO_STREAM(this->get_logger(), "Initialize successfully " << this->get_name());
-  publishRoute();
-}
-
-NavRouteServer::~NavRouteServer()
-{
-  RCLCPP_INFO_STREAM(this->get_logger(), "Finish " << this->get_name());
-}
-
-void NavRouteServer::waypointsSubscribeCallback(
-  const nav_waypoint_msgs::msg::Waypoints::ConstSharedPtr & msg)
-{
-  std::lock_guard<std::mutex> waypoint_lock{waypoints_mutex_};
-  RCLCPP_INFO(this->get_logger(), "Recived new waypoint");
-  waypoints_ = msg;
-  route_index_ = 0;
-}
-
-void NavRouteServer::resetRouteServiceCallback(
-  const std_srvs::srv::Empty::Request::ConstSharedPtr &,
-  const std_srvs::srv::Empty::Response::SharedPtr &)
-{
-  std::lock_guard<std::mutex> route_index_lock{route_index_mutex_};
-  route_index_ = 0;
-  RCLCPP_INFO(this->get_logger(), "Resetted route index");
-}
-
-void NavRouteServer::releaseResumeCallback(const std_msgs::msg::Bool::ConstSharedPtr & msg)
-{
-  release_resume_state_ = msg->data;
-}
-
-void NavRouteServer::reachWaypointObserverCallback()
-{
-  static bool startup_resume = true;
-
-  const bool release_resume_state = release_resume_state_;
-  int waypoint_index = route_reset_index_;
-  release_resume_state_ = false;
-
-  if (release_resume_state) {
-    startup_resume = false;
-  }
-  if (route_.route.size() < 1) {
-    RCLCPP_WARN(this->get_logger(), "Route size is ZERO");
-    return;
-  }
-  if (startup_resume) {
-    RCLCPP_INFO(this->get_logger(), "Startup resume now; please interact");
-    return;
-  }
-  //! waypoint_lock scope
+  void validateRoute(const nav_waypoint_msgs::msg::Route & route) const
   {
-    std::lock_guard<std::mutex> waypoint_lock{waypoints_mutex_};
-    if (!waypoints_) {
-      RCLCPP_WARN_STREAM(this->get_logger(), "Not recived waypoints");
-      return;
+    if (!waypoints_ && !route.route.empty()) {
+      throw std::invalid_argument("Waypoints have not been received");
     }
-    if (route_index_ < 0 || route_index_ >= static_cast<int>(route_.route.size())) {
-      RCLCPP_WARN(this->get_logger(), "Not ready route index");
-      return;
-    }
-    const std::string waypoint_name = route_.route[route_index_];
-    int waypoint_counter = 0;
-
-    for (const auto & w : waypoints_->waypoints) {
-      if (w.name == waypoint_name) {
-        waypoint_index = waypoint_counter;
-        break;
+    for (const auto & name : route.route) {
+      if (name.empty() || std::none_of(
+          waypoints_->waypoints.begin(), waypoints_->waypoints.end(),
+          [&name](const nav_waypoint_msgs::msg::Waypoint & w) {return w.name == name;}))
+      {
+        throw std::invalid_argument("Unknown route waypoint: " + name);
       }
-      waypoint_counter++;
-    }
-    if (waypoint_index < 0) {
-      RCLCPP_WARN_STREAM(this->get_logger(), "Not exits waypoint: " << waypoint_name);
-      RCLCPP_WARN_STREAM(this->get_logger(), "Skip waypoint: " << waypoint_name);
-      route_index_++;
-      publish_goal_index_ = 0;
-      return;
-    }
-    if (waypoint_index >= static_cast<int>(waypoints_->waypoints.size())) {
-      RCLCPP_INFO(this->get_logger(), "Finish route");
-      waypoint_index = route_reset_index_;
-      return;
-    }
-    geometry_msgs::msg::TransformStamped tf_stamped;
-    try {
-      tf_stamped = tf_buffer_->lookupTransform(
-        params_.waypoint_frame_id,
-        params_.robot_frame_id,
-        tf2::TimePointZero
-      );
-    } catch (const tf2::TransformException & tfe) {
-      RCLCPP_WARN_STREAM(
-        this->get_logger(),
-        "Could not transform "
-          << params_.waypoint_frame_id
-          << " to "
-          << params_.robot_frame_id);
-      return;
-    }
-    Eigen::Vector3d robot_position;
-    Eigen::Vector3d waypoint_position;
-    Eigen::Vector3d dist_position;
-    const geometry_msgs::msg::Pose waypoint_pose = waypoints_->waypoints[waypoint_index].pose;
-
-    if (params_.evalute_only_xy_reach) {
-      robot_position.x() = tf_stamped.transform.translation.x;
-      robot_position.y() = tf_stamped.transform.translation.y;
-      robot_position.z() = 0.0;
-      waypoint_position.x() = waypoint_pose.position.x;
-      waypoint_position.y() = waypoint_pose.position.y;
-      waypoint_position.z() = 0.0;
-    } else {
-      robot_position.x() = tf_stamped.transform.translation.x;
-      robot_position.y() = tf_stamped.transform.translation.y;
-      robot_position.z() = tf_stamped.transform.translation.z;
-      waypoint_position.x() = waypoint_pose.position.x;
-      waypoint_position.y() = waypoint_pose.position.y;
-      waypoint_position.z() = waypoint_pose.position.z;
-    }
-
-    dist_position = waypoint_position - robot_position;
-    const double goal_dist_norm = dist_position.lpNorm<2>();
-    double goal_reached_radius = params_.reach_position_threshold;
-    for (const auto & property : waypoints_->waypoints[waypoint_index].properties) {
-      if (property.key == "goal_reached_radius") {
-        goal_reached_radius = std::stof(property.value);
-        break;
-      }
-    }
-    if (goal_reached_radius > goal_dist_norm) {
-      bool resume_enabled = false;
-      for (const auto & property : waypoints_->waypoints[waypoint_index].properties) {
-        if (property.key == "stop_with_resume") {
-          if (property.value == "true") {
-            resume_enabled = true;
-          }
-          break;
-        }
-      }
-      if (resume_enabled && !release_resume_state) {
-        RCLCPP_INFO(this->get_logger(), "Resume state now; please interact");
-        return;
-      }
-      route_index_++;
-      publish_goal_index_ = 0;
-      return;
     }
   }
-  if (publish_goal_index_ == 0) {
-    publishLatestWaypoint(waypoint_index);
-    RCLCPP_INFO_STREAM(this->get_logger(), "Next waypoint is " << waypoints_->waypoints[waypoint_index].name);
+
+  void publishRoute()
+  {
+    route_.header.stamp = now();
+    route_publisher_->publish(route_);
   }
-  if (publish_goal_index_ >= params_.publish_goal_with_reach_observe) {
+
+  void setProgress(const std::string & state, const std::string & reason)
+  {
+    const std::string name = route_index_ >= 0 &&
+      route_index_ < static_cast<int>(route_.route.size()) ? route_.route[route_index_] : "";
+    if (progress_.state == state && progress_.reason == reason &&
+      progress_.route_index == route_index_ && progress_.route_size == route_.route.size() &&
+      progress_.waypoint_name == name)
+    {
+      return;
+    }
+    progress_.header.frame_id = params_.waypoint_frame_id;
+    progress_.header.stamp = now();
+    progress_.state = state;
+    progress_.reason = reason;
+    progress_.route_index = route_index_;
+    progress_.route_size = static_cast<uint32_t>(route_.route.size());
+    progress_.waypoint_name = name;
+    progress_publisher_->publish(progress_);
+  }
+
+  void reset()
+  {
+    route_index_ = 0;
     publish_goal_index_ = 0;
-  } else {
+    startup_wait_ = true;
+    waiting_resume_ = false;
+    resume_pending_ = false;
+    setProgress("startup_wait", "");
+  }
+
+  void publishGoal(const nav_waypoint_msgs::msg::Waypoint & waypoint)
+  {
+    if (publish_goal_index_ == 0) {
+      auto goal = waypoint;
+      goal.frame_id = params_.waypoint_frame_id;
+      goal.stamp = now();
+      goal_publisher_->publish(goal);
+    }
     publish_goal_index_++;
+    if (publish_goal_index_ >= std::max<int64_t>(1, params_.publish_goal_with_reach_observe)) {
+      publish_goal_index_ = 0;
+    }
   }
-}
 
-void NavRouteServer::publishRoute()
-{
-  nav_waypoint_msgs::msg::Route::UniquePtr msg;
-  msg = std::make_unique<nav_waypoint_msgs::msg::Route>(route_);
-  route_publisher_->publish(std::move(msg));
-}
-
-void NavRouteServer::publishLatestWaypoint(const int waypoint_index)
-{
-  if (waypoint_index < 0) {
-    RCLCPP_WARN(this->get_logger(), "Incorrect index");
-    return;
+  void observe()
+  {
+    if (route_index_ < 0) {
+      setProgress("disabled", "Call reset to enable the route");
+      return;
+    }
+    if (route_.route.empty()) {
+      setProgress("empty", "No route configured");
+      return;
+    }
+    if (route_index_ >= static_cast<int>(route_.route.size())) {
+      setProgress("completed", "All route positions passed; not navigation success");
+      return;
+    }
+    try {
+      validateRoute(route_);
+    } catch (const std::exception & e) {
+      setProgress("blocked", e.what());
+      return;
+    }
+    if (startup_wait_ && !resume_pending_) {
+      setProgress("startup_wait", "Send release_resume=true to start");
+      return;
+    }
+    const auto & name = route_.route[route_index_];
+    const auto found = std::find_if(
+      waypoints_->waypoints.begin(), waypoints_->waypoints.end(),
+      [&name](const nav_waypoint_msgs::msg::Waypoint & w) {return w.name == name;});
+    geometry_msgs::msg::TransformStamped tf;
+    try {
+      tf = tf_buffer_->lookupTransform(
+        params_.waypoint_frame_id, params_.robot_frame_id, tf2::TimePointZero);
+    } catch (const tf2::TransformException & e) {
+      if (!startup_wait_) {
+        publishGoal(*found);
+      }
+      setProgress("blocked", e.what());
+      return;  // Retain a pending resume until TF is available again.
+    }
+    double radius = params_.reach_position_threshold;
+    bool stop = false;
+    for (const auto & property : found->properties) {
+      if (property.key == "goal_reached_radius") {
+        radius = nav_waypoint_msgs::positiveNumber(property.value);
+      } else if (property.key == "stop_with_resume") {
+        stop = property.value == "true";
+      }
+    }
+    const double dx = found->pose.position.x - tf.transform.translation.x;
+    const double dy = found->pose.position.y - tf.transform.translation.y;
+    const double dz = params_.evalute_only_xy_reach ? 0.0 :
+      found->pose.position.z - tf.transform.translation.z;
+    const double distance = std::hypot(std::hypot(dx, dy), dz);
+    if (!std::isfinite(distance)) {
+      setProgress("blocked", "Non-finite robot transform");
+      return;
+    }
+    if (startup_wait_) {
+      startup_wait_ = false;
+      resume_pending_ = false;  // Starting never releases the first stop waypoint.
+    }
+    const bool reached = distance <= radius;
+    if (reached && (!stop || (waiting_resume_ && resume_pending_))) {
+      route_index_++;
+      publish_goal_index_ = 0;
+      waiting_resume_ = false;
+      resume_pending_ = false;
+      setProgress(
+        route_index_ == static_cast<int>(route_.route.size()) ? "completed" : "running", "");
+      return;
+    }
+    if (reached && stop) {
+      waiting_resume_ = true;
+    }
+    // Continue issuing the same position even while waiting or after drifting
+    // outside the radius. The receiver remains responsible for robot motion.
+    publishGoal(*found);
+    setProgress(waiting_resume_ ? "waiting_resume" : "running", "");
   }
-  std::lock_guard<std::mutex> route_index_lock{route_index_mutex_};
-
-  nav_waypoint_msgs::msg::Waypoint::UniquePtr msg;
-  msg = std::make_unique<nav_waypoint_msgs::msg::Waypoint>(
-    waypoints_->waypoints[waypoint_index]
-  );
-  msg->stamp = this->get_clock()->now();
-  waypoint_publisher_->publish(std::move(msg));
-}
-
-nav_waypoint_msgs::msg::Route NavRouteServer::loadRoute(const std::string & file_path)
-{
-  nav_waypoint_msgs::msg::Route ret_route;
-  YAML::Node yaml_node = YAML::LoadFile(file_path);
-
-  for (const auto & r : yaml_node["waypoint_manager"]["route"]) {
-    ret_route.route.push_back(r.as<std::string>());
-  }
-  return ret_route;
-}
-
-bool NavRouteServer::isLoadableRoute(const std::string & file_path)
-{
-  std::ifstream f;
-  f.open(file_path);
-  const bool is_open = f.is_open();
-  f.close();
-  return is_open;
-}
+};
 }  // namespace nav_waypoint_server
 
 RCLCPP_COMPONENTS_REGISTER_NODE(nav_waypoint_server::NavRouteServer)

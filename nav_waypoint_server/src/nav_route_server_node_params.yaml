@@ -20,34 +20,47 @@
 
 nav_route_server:
   route_file:
+    read_only: true
     type: string
     default_value: route.yaml
     description: Waypoint route file path
   waypoint_frame_id:
+    read_only: true
     type: string
     default_value: map
     description: Waypoint route frame id
   robot_frame_id:
+    read_only: true
     type: string
     default_value: base_link
     description: Robot frame id
   route_index_auto_reset:
+    read_only: true
     type: bool
     default_value: true
     description: Route index auto resetting on initialize
   reach_observe_frequency:
+    read_only: true
     type: double
     default_value: 1.0
     description: Waypoint reach observer frequency (Hz)
   reach_position_threshold:
+    read_only: true
     type: double
     default_value: 1.0
     description: Reach waypoint position threshold
   publish_goal_with_reach_observe:
+    read_only: true
     type: int
     default_value: 10
-    description: Publish goal frequency (reach_observe_frequency / this)
+    description: Observer ticks between goals; 0 and 1 publish every tick
   evalute_only_xy_reach:
+    read_only: true
     type: bool
     default_value: false
     description: Evalute only xy reach (bool)
+  route_save_file:
+    read_only: true
+    type: string
+    default_value: ""
+    description: Save destination; empty uses route_file

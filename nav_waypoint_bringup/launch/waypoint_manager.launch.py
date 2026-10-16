@@ -28,6 +28,10 @@ import launch_ros
 
 
 def generate_launch_description():
+    data_dir = os.path.join(
+        os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share')),
+        'nav_waypoint_manager')
+    os.makedirs(data_dir, exist_ok=True)
     this_pkg_share_dir = get_package_share_directory('nav_waypoint_bringup')
 
     waypoint_frame_id_param = {
@@ -38,6 +42,12 @@ def generate_launch_description():
     }
     route_file_param = {
         'route_file': launch.substitutions.LaunchConfiguration('route_file')
+    }
+    waypoints_save_file_param = {
+        'waypoints_save_file': launch.substitutions.LaunchConfiguration('waypoints_save_file')
+    }
+    route_save_file_param = {
+        'route_save_file': launch.substitutions.LaunchConfiguration('route_save_file')
     }
     use_sim_time_param = {
         'use_sim_time': launch.substitutions.LaunchConfiguration('use_sim_time')
@@ -69,6 +79,13 @@ def generate_launch_description():
             )
         ),
         launch.actions.DeclareLaunchArgument(
+            'waypoints_save_file', default_value=os.path.join(data_dir, 'waypoints.yaml')
+        ),
+        launch.actions.DeclareLaunchArgument(
+            'route_save_file', default_value=os.path.join(data_dir, 'route.yaml')
+        ),
+        launch.actions.DeclareLaunchArgument('use_rviz', default_value='false'),
+        launch.actions.DeclareLaunchArgument(
             'use_sim_time',
             default_value='false'
         ),
@@ -84,6 +101,7 @@ def generate_launch_description():
                         parameters=[
                             waypoint_frame_id_param,
                             waypoints_file_param,
+                            waypoints_save_file_param,
                             use_sim_time_param
                         ],
                         on_exit=shutdown_event
@@ -98,6 +116,7 @@ def generate_launch_description():
                 parameters=[
                     waypoint_frame_id_param,
                     route_file_param,
+                    route_save_file_param,
                     use_sim_time_param
                 ],
                 on_exit=shutdown_event
@@ -128,6 +147,7 @@ def generate_launch_description():
                 name='pose_stamped_to_nav_waypoint',
                 output='screen',
                 parameters=[
+                    waypoint_frame_id_param,
                     use_sim_time_param
                 ],
                 remappings=[
@@ -142,6 +162,7 @@ def generate_launch_description():
                 name='nav_waypoint_to_pose_stamped',
                 output='screen',
                 parameters=[
+                    waypoint_frame_id_param,
                     use_sim_time_param
                 ],
                 remappings=[
@@ -149,6 +170,14 @@ def generate_launch_description():
                     ('~/output_pose', '/goal_pose')
                 ],
                 on_exit=shutdown_event
+            ),
+            launch_ros.actions.Node(
+                package='rviz2', executable='rviz2',
+                arguments=['-d', os.path.join(this_pkg_share_dir, 'rviz', 'waypoint.rviz'),
+                           '-f', launch.substitutions.LaunchConfiguration('waypoint_frame_id')],
+                parameters=[use_sim_time_param],
+                condition=launch.conditions.IfCondition(
+                    launch.substitutions.LaunchConfiguration('use_rviz'))
             )
         ])
     ])

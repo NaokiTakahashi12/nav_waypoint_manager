@@ -18,6 +18,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   msg/Waypoint.msg
   msg/Waypoints.msg
   msg/Route.msg
+  msg/RouteProgress.msg
+  srv/SetRoute.srv
+  srv/UpsertWaypoint.srv
+  srv/DeleteWaypoint.srv
   DEPENDENCIES
     builtin_interfaces
     std_msgs
@@ -41,4 +45,4 @@ ament_export_dependencies(
   rosidl_default_runtime
 )
 
-ament_auto_package()
+ament_auto_package(USE_SCOPED_HEADER_INSTALL_DIR)

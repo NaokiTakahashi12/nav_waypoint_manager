@@ -18,6 +18,11 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#include <chrono>
+#include <string>
+#include <stdexcept>
+#include <rcl_interfaces/msg/parameter_descriptor.hpp>
+#include <nav_waypoint_msgs/validation.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
@@ -32,6 +37,8 @@ public:
   ~PoseStampedToNavWaypointNode();
 
 private:
+  std::string frame_id_;
+  uint64_t callback_counter_{0};
   rclcpp::Publisher<nav_waypoint_msgs::msg::Waypoint>::SharedPtr waypoint_publisher_;
   rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr pose_subscription_;
 
@@ -45,6 +52,12 @@ PoseStampedToNavWaypointNode::PoseStampedToNavWaypointNode(const rclcpp::NodeOpt
   pose_subscription_(nullptr)
 {
   RCLCPP_INFO_STREAM(this->get_logger(), "Start initialize " << this->get_name());
+  rcl_interfaces::msg::ParameterDescriptor descriptor;
+  descriptor.read_only = true;
+  frame_id_ = declare_parameter<std::string>("waypoint_frame_id", "map", descriptor);
+  if (frame_id_.empty()) {
+    throw std::invalid_argument("waypoint_frame_id must not be empty");
+  }
 
   waypoint_publisher_ = this->create_publisher<nav_waypoint_msgs::msg::Waypoint>(
     "~/output_waypoint",
@@ -71,20 +84,20 @@ PoseStampedToNavWaypointNode::~PoseStampedToNavWaypointNode()
 void PoseStampedToNavWaypointNode::poseSubscribeCallback(
   const geometry_msgs::msg::PoseStamped::ConstSharedPtr & pose_msg)
 {
-  static int callback_counter = 0;
   nav_waypoint_msgs::msg::Waypoint::UniquePtr waypoint_msg;
 
-  //! @todo to parameter
-  if (pose_msg->header.frame_id != "map") {
-    RCLCPP_INFO(this->get_logger(), "Please input map frame");
+  if (pose_msg->header.frame_id != frame_id_) {
+    RCLCPP_WARN(this->get_logger(), "Input pose frame does not match waypoint_frame_id");
     return;
   }
 
   waypoint_msg = std::make_unique<nav_waypoint_msgs::msg::Waypoint>();
+  waypoint_msg->frame_id = frame_id_;
   waypoint_msg->pose = pose_msg->pose;
   waypoint_msg->stamp = pose_msg->header.stamp;
   waypoint_msg->name =
-    "wp_" + std::to_string(pose_msg->header.stamp.sec) + "_" + std::to_string(callback_counter);
+    "wp_" + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) +
+    "_" + std::to_string(callback_counter_++);
   {
     nav_waypoint_msgs::msg::Property default_waypoint_property;
     default_waypoint_property.key = "goal_reached_radius";
@@ -98,8 +111,12 @@ void PoseStampedToNavWaypointNode::poseSubscribeCallback(
     waypoint_msg->properties.push_back(default_waypoint_property);
   }
 
-  waypoint_publisher_->publish(std::move(waypoint_msg));
-  callback_counter++;
+  try {
+    nav_waypoint_msgs::validateWaypoint(*waypoint_msg, frame_id_);
+    waypoint_publisher_->publish(std::move(waypoint_msg));
+  } catch (const std::exception & e) {
+    RCLCPP_WARN(get_logger(), "Rejected input pose: %s", e.what());
+  }
 }
 }  // namespace nav_waypoint_conversion
 

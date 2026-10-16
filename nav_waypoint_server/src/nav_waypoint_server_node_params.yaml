@@ -20,10 +20,17 @@
 
 nav_waypoint_server:
   waypoints_file:
+    read_only: true
     type: string
     default_value: waypoints.yaml
     description: Waypoints file path
   waypoint_frame_id:
+    read_only: true
     type: string
     default_value: map
     description: Waypoint frame id
+  waypoints_save_file:
+    read_only: true
+    type: string
+    default_value: ""
+    description: Save destination; empty uses waypoints_file
