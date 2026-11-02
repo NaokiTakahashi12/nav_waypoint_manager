@@ -29,8 +29,8 @@ import time
 
 import rclpy
 from rclpy.qos import DurabilityPolicy, QoSProfile
-from nav_waypoint_msgs.msg import Property, Route, Waypoint, Waypoints
-from nav_waypoint_msgs.srv import DeleteWaypoint, SetRoute, UpsertWaypoint
+from nav_waypoint_msgs.msg import WaypointRouteConfiguration, Property, Route, Waypoint
+from nav_waypoint_msgs.srv import DeleteWaypoint, RenameWaypoint, SetRoute, UpsertWaypoint
 from std_srvs.srv import Trigger
 
 
@@ -61,12 +61,9 @@ def main():
     node = rclpy.create_node('waypoint_edit', namespace=args.namespace)
     snapshots = {}
     qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-    subscriptions = [
-        node.create_subscription(Waypoints, 'nav_waypoint_server/waypoints',
-                                 lambda msg: snapshots.update(waypoints=msg), qos),
-        node.create_subscription(Route, 'nav_route_server/route',
-                                 lambda msg: snapshots.update(route=msg), qos),
-    ]
+    subscriptions = [node.create_subscription(
+        WaypointRouteConfiguration, 'nav_waypoint_server/configuration',
+        lambda msg: snapshots.update(waypoints=msg.registered_waypoints, route=msg.route), qos)]
 
     def wait_for(condition):
         deadline = time.monotonic() + 5.0
@@ -74,11 +71,6 @@ def main():
             if time.monotonic() >= deadline:
                 raise RuntimeError('Timed out waiting for waypoint/route data')
             rclpy.spin_once(node, timeout_sec=0.05)
-
-    def retry_delay():
-        deadline = time.monotonic() + 0.1
-        while time.monotonic() < deadline:
-            rclpy.spin_once(node, timeout_sec=max(0.0, deadline - time.monotonic()))
 
     def call(service_type, name, request):
         client = node.create_client(service_type, name)
@@ -101,21 +93,7 @@ def main():
         missing = [name for name in route.route if name not in known]
         if missing:
             raise ValueError('Unknown route waypoint: ' + missing[0])
-        deadline = time.monotonic() + 5.0
-        while True:
-            try:
-                call(SetRoute, 'nav_route_server/set_route', SetRoute.Request(route=route))
-                break
-            except RuntimeError as error:
-                # DDS delivery of a just-registered waypoint may lag behind the
-                # service response. Retry only a definite validation rejection.
-                if ('Unknown route waypoint:' not in str(error) and
-                        'Waypoints have not been received' not in str(error)):
-                    raise
-                if time.monotonic() >= deadline:
-                    raise
-                retry_delay()
-        wait_for(lambda: snapshots['route'].route == route.route)
+        call(SetRoute, 'nav_waypoint_server/set_route', SetRoute.Request(route=route))
 
     try:
         wait_for(lambda: 'waypoints' in snapshots and 'route' in snapshots)
@@ -150,28 +128,10 @@ def main():
             call(DeleteWaypoint, 'nav_waypoint_server/delete',
                  DeleteWaypoint.Request(name=args.name))
         elif args.command == 'rename':
-            if args.old_name not in waypoints:
-                raise ValueError('Unknown waypoint: ' + args.old_name)
-            if not args.new_name or args.new_name in waypoints:
-                raise ValueError('New name must be nonempty and unused')
-            w = copy.deepcopy(waypoints[args.old_name])
-            w.name = args.new_name
-            call(UpsertWaypoint, 'nav_waypoint_server/upsert', UpsertWaypoint.Request(waypoint=w))
-            wait_for(lambda: any(w.name == args.new_name
-                                 for w in snapshots['waypoints'].waypoints))
-            route = copy.deepcopy(snapshots['route'])
-            route.route = [args.new_name if name == args.old_name else name
-                           for name in route.route]
-            if args.old_name in snapshots['route'].route:
-                set_route(route)
-            try:
-                call(DeleteWaypoint, 'nav_waypoint_server/delete',
-                     DeleteWaypoint.Request(name=args.old_name))
-            except RuntimeError as error:
-                raise RuntimeError('New waypoint remains registered: ' + str(error)) from error
+            call(RenameWaypoint, 'nav_waypoint_server/rename',
+                 RenameWaypoint.Request(old_name=args.old_name, new_name=args.new_name))
         elif args.command == 'save':
             call(Trigger, 'nav_waypoint_server/save', Trigger.Request())
-            call(Trigger, 'nav_route_server/save', Trigger.Request())
         print('Done: ' + args.command)
         return 0
     except (RuntimeError, ValueError) as error:

@@ -191,6 +191,18 @@ void NavWaypointInteractiveMarkerNode::feedbackWaypointCallback(
   msg->pose = feedback->pose;
   try {
     nav_waypoint_msgs::validateWaypoint(*msg, msg->frame_id);
+    if (params_.interactive_xy_only) {
+      msg->pose.position.z = found->pose.position.z;
+      tf2::Quaternion original, edited;
+      tf2::fromMsg(found->pose.orientation, original);
+      tf2::fromMsg(feedback->pose.orientation, edited);
+      double roll, pitch, yaw, ignored_roll, ignored_pitch;
+      tf2::Matrix3x3(original).getRPY(roll, pitch, yaw);
+      tf2::Matrix3x3(edited).getRPY(ignored_roll, ignored_pitch, yaw);
+      edited.setRPY(roll, pitch, yaw);
+      msg->pose.orientation = tf2::toMsg(edited);
+    }
+    nav_waypoint_msgs::validateWaypoint(*msg, msg->frame_id);
     modify_waypoint_publisher_->publish(std::move(msg));
   } catch (const std::exception & e) {
     RCLCPP_WARN(get_logger(), "Invalid marker pose: %s", e.what());
@@ -223,18 +235,11 @@ void NavWaypointInteractiveMarkerNode::setFlagMarkerFromProperties(
   visualization_msgs::msg::InteractiveMarkerControl & waypoint_control,
   const std::vector<nav_waypoint_msgs::msg::Property> & properties)
 {
-  double goal_reached_radius = 1.0;
-  bool stop_with_resume = false;
-
-  for (const auto & p : properties) {
-    if ("goal_reached_radius" == p.key) {
-      goal_reached_radius = nav_waypoint_msgs::positiveNumber(p.value);
-    } else if ("stop_with_resume" == p.key) {
-      if ("true" == p.value) {
-        stop_with_resume = true;
-      }
-    }
-  }
+  nav_waypoint_msgs::msg::Waypoint waypoint;
+  waypoint.properties = properties;
+  const auto settings = nav_waypoint_msgs::reachSettings(waypoint);
+  const double goal_reached_radius = settings.first;
+  const bool stop_with_resume = settings.second;
 
   std::vector<visualization_msgs::msg::Marker> flag_marker_parts(4);
 

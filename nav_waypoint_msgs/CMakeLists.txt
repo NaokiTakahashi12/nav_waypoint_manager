@@ -22,7 +22,9 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   srv/SetRoute.srv
   srv/UpsertWaypoint.srv
   srv/DeleteWaypoint.srv
-  srv/ReserveRoute.srv
+  srv/RenameWaypoint.srv
+  msg/WaypointRouteConfiguration.msg
+  msg/WaypointGoal.msg
   DEPENDENCIES
     builtin_interfaces
     std_msgs

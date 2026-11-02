@@ -43,11 +43,9 @@ def generate_launch_description():
     route_file_param = {
         'route_file': launch.substitutions.LaunchConfiguration('route_file')
     }
-    waypoints_save_file_param = {
-        'waypoints_save_file': launch.substitutions.LaunchConfiguration('waypoints_save_file')
-    }
-    route_save_file_param = {
-        'route_save_file': launch.substitutions.LaunchConfiguration('route_save_file')
+    waypoint_route_configuration_save_file_param = {
+        'waypoint_route_configuration_save_file':
+            launch.substitutions.LaunchConfiguration('waypoint_route_configuration_save_file')
     }
     use_sim_time_param = {
         'use_sim_time': launch.substitutions.LaunchConfiguration('use_sim_time')
@@ -79,10 +77,8 @@ def generate_launch_description():
             )
         ),
         launch.actions.DeclareLaunchArgument(
-            'waypoints_save_file', default_value=os.path.join(data_dir, 'waypoints.yaml')
-        ),
-        launch.actions.DeclareLaunchArgument(
-            'route_save_file', default_value=os.path.join(data_dir, 'route.yaml')
+            'waypoint_route_configuration_save_file',
+            default_value=os.path.join(data_dir, 'waypoint_route_configuration.yaml')
         ),
         launch.actions.DeclareLaunchArgument('reach_position_threshold', default_value='1.0'),
         launch.actions.DeclareLaunchArgument('max_transform_age', default_value='1.0'),
@@ -104,7 +100,8 @@ def generate_launch_description():
                         parameters=[
                             waypoint_frame_id_param,
                             waypoints_file_param,
-                            waypoints_save_file_param,
+                            waypoint_route_configuration_save_file_param,
+                            route_file_param,
                             {'default_goal_reached_radius':
                              launch_ros.parameter_descriptions.ParameterValue(
                                  launch.substitutions.LaunchConfiguration(
@@ -122,8 +119,6 @@ def generate_launch_description():
                 output='screen',
                 parameters=[
                     waypoint_frame_id_param,
-                    route_file_param,
-                    route_save_file_param,
                     {'reach_position_threshold': launch_ros.parameter_descriptions.ParameterValue(
                         launch.substitutions.LaunchConfiguration('reach_position_threshold'),
                         value_type=float)},

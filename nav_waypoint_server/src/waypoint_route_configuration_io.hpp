@@ -18,8 +18,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#ifndef DATASET_IO_HPP_
-#define DATASET_IO_HPP_
+#ifndef WAYPOINT_ROUTE_CONFIGURATION_IO_HPP_
+#define WAYPOINT_ROUTE_CONFIGURATION_IO_HPP_
 
 #include <unistd.h>
 #include <sys/stat.h>
@@ -43,10 +43,12 @@ inline bool fileExists(const std::string & path)
   if (errno == ENOENT) {
     return false;
   }
-  throw std::runtime_error("Cannot inspect dataset: " + path);
+  throw std::runtime_error("Cannot inspect configuration: " + path);
 }
 
-inline YAML::Node loadDataset(const std::string & path, const std::string & frame)
+inline YAML::Node loadConfigurationDocument(
+  const std::string & path,
+  const std::string & frame)
 {
   auto root = YAML::LoadFile(path);
   const auto manager = root["waypoint_manager"];
@@ -54,15 +56,18 @@ inline YAML::Node loadDataset(const std::string & path, const std::string & fram
     throw std::invalid_argument("Missing waypoint_manager mapping: " + path);
   }
   if (manager["frame_id"] && manager["frame_id"].as<std::string>() != frame) {
-    throw std::invalid_argument("Dataset frame mismatch: " + path);
+    throw std::invalid_argument("WaypointRouteConfiguration frame mismatch: " + path);
   }
   return root;
 }
 
-// Keep other dataset sections when a route and waypoints share an output file.
-inline YAML::Node outputDataset(const std::string & path, const std::string & frame)
+// Preserve unrelated YAML sections; the caller replaces both registry and visit order.
+inline YAML::Node prepareConfigurationDocumentForSave(
+  const std::string & path,
+  const std::string & frame)
 {
-  YAML::Node root = fileExists(path) ? loadDataset(path, frame) : YAML::Node(YAML::NodeType::Map);
+  YAML::Node root = fileExists(path) ? loadConfigurationDocument(path, frame) : YAML::Node(
+    YAML::NodeType::Map);
   root["waypoint_manager"]["frame_id"] = frame;
   return root;
 }
@@ -93,17 +98,17 @@ inline void atomicSave(const std::string & path, const YAML::Node & root)
         continue;
       }
       if (count <= 0) {
-        throw std::runtime_error("Failed to write dataset");
+        throw std::runtime_error("Failed to write configuration");
       }
       written += static_cast<std::size_t>(count);
     }
     if (::fsync(fd) != 0) {
-      throw std::runtime_error("Failed to flush dataset");
+      throw std::runtime_error("Failed to flush configuration");
     }
     const int close_result = ::close(fd);
     fd = -1;
     if (close_result != 0 || ::rename(temporary.data(), path.c_str()) != 0) {
-      throw std::runtime_error("Failed to replace dataset");
+      throw std::runtime_error("Failed to replace configuration");
     }
   } catch (...) {
     if (fd >= 0) {
@@ -114,4 +119,4 @@ inline void atomicSave(const std::string & path, const YAML::Node & root)
   }
 }
 }  // namespace nav_waypoint_server
-#endif  // DATASET_IO_HPP_
+#endif  // WAYPOINT_ROUTE_CONFIGURATION_IO_HPP_

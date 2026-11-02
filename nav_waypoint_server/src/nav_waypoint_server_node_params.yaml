@@ -29,13 +29,18 @@ nav_waypoint_server:
     type: string
     default_value: map
     description: Waypoint frame id
-  waypoints_save_file:
+  waypoint_route_configuration_save_file:
     read_only: true
     type: string
     default_value: ""
-    description: Save destination; empty uses waypoints_file
+    description: Complete configuration save destination; empty uses waypoints_file
   default_goal_reached_radius:
     read_only: true
     type: double
     default_value: 1.0
     description: Radius assigned to waypoints without an explicit radius
+  route_file:
+    read_only: true
+    type: string
+    default_value: ""
+    description: Legacy route input; empty reads route from waypoints_file

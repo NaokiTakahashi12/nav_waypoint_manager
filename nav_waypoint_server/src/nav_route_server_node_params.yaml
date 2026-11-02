@@ -19,11 +19,6 @@
 # SOFTWARE.
 
 nav_route_server:
-  route_file:
-    read_only: true
-    type: string
-    default_value: route.yaml
-    description: Waypoint route file path
   waypoint_frame_id:
     read_only: true
     type: string
@@ -59,11 +54,6 @@ nav_route_server:
     type: bool
     default_value: false
     description: Evalute only xy reach (bool)
-  route_save_file:
-    read_only: true
-    type: string
-    default_value: ""
-    description: Save destination; empty uses route_file
   max_transform_age:
     read_only: true
     type: double

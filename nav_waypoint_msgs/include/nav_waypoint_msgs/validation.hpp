@@ -25,8 +25,11 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <unordered_map>
+#include <vector>
 
-#include <nav_waypoint_msgs/msg/waypoints.hpp>
+#include <nav_waypoint_msgs/msg/waypoint_route_configuration.hpp>
 
 namespace nav_waypoint_msgs
 {
@@ -43,6 +46,17 @@ inline double positiveNumber(const std::string & value)
   const double result = std::stod(value, &used);
   if (used != value.size() || !std::isfinite(result) || result <= 0.0) {
     throw std::invalid_argument("Expected a finite positive number: " + value);
+  }
+  return result;
+}
+
+// Decode known policy once at the data boundary; preserve unknown properties.
+inline std::pair<double, bool> reachSettings(const msg::Waypoint & w, double fallback = 1.0)
+{
+  std::pair<double, bool> result{fallback, false};
+  for (const auto & p : w.properties) {
+    if (p.key == "goal_reached_radius") {result.first = positiveNumber(p.value);}
+    if (p.key == "stop_with_resume") {result.second = p.value == "true";}
   }
   return result;
 }
@@ -90,6 +104,31 @@ inline void validateWaypoints(const msg::Waypoints & ws, const std::string & fra
       throw std::invalid_argument("Duplicate waypoint name: " + w.name);
     }
   }
+}
+// Resolve only route-assigned locations, retaining visit order and repeated visits.
+// Consumers share this interpretation of the editable configuration.
+inline std::vector<msg::Waypoint> resolveRouteWaypoints(
+  const msg::WaypointRouteConfiguration & configuration, const std::string & frame)
+{
+  if (frame.empty()) {throw std::invalid_argument("Configuration frame must not be empty");}
+  validateWaypoints(configuration.registered_waypoints, frame);
+  if (configuration.route.header.frame_id != frame) {
+    throw std::invalid_argument("Route frame mismatch");
+  }
+  std::unordered_map<std::string, const msg::Waypoint *> registered;
+  for (const auto & waypoint : configuration.registered_waypoints.waypoints) {
+    registered.emplace(waypoint.name, &waypoint);
+  }
+  std::vector<msg::Waypoint> route_waypoints;
+  route_waypoints.reserve(configuration.route.route.size());
+  for (const auto & name : configuration.route.route) {
+    const auto found = registered.find(name);
+    if (found == registered.end()) {
+      throw std::invalid_argument("Unknown route waypoint: " + name);
+    }
+    route_waypoints.push_back(*found->second);
+  }
+  return route_waypoints;
 }
 }  // namespace nav_waypoint_msgs
 #endif  // NAV_WAYPOINT_MSGS__VALIDATION_HPP_

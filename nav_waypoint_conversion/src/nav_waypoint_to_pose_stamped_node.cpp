@@ -25,7 +25,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <geometry_msgs/msg/pose_stamped.hpp>
-#include <nav_waypoint_msgs/msg/waypoint.hpp>
+#include <nav_waypoint_msgs/msg/waypoint_goal.hpp>
 
 namespace nav_waypoint_conversion
 {
@@ -38,11 +38,11 @@ public:
 private:
   std::string frame_id_;
   bool publish_unchanged_goals_{true};
-  nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr last_goal_;
+  nav_waypoint_msgs::msg::WaypointGoal::ConstSharedPtr last_goal_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_publisher_;
-  rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr waypoint_subscription_;
+  rclcpp::Subscription<nav_waypoint_msgs::msg::WaypointGoal>::SharedPtr waypoint_subscription_;
 
-  void waypointSubscribeCallback(const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr &);
+  void waypointSubscribeCallback(const nav_waypoint_msgs::msg::WaypointGoal::ConstSharedPtr &);
 };
 
 NavWaypointToPoseStampedNode::NavWaypointToPoseStampedNode(const rclcpp::NodeOptions & node_options)
@@ -64,7 +64,7 @@ NavWaypointToPoseStampedNode::NavWaypointToPoseStampedNode(const rclcpp::NodeOpt
     "~/output_pose",
     rclcpp::QoS(2)
   );
-  waypoint_subscription_ = this->create_subscription<nav_waypoint_msgs::msg::Waypoint>(
+  waypoint_subscription_ = this->create_subscription<nav_waypoint_msgs::msg::WaypointGoal>(
     "~/input_waypoint",
     rclcpp::QoS(5),
     std::bind(
@@ -82,8 +82,13 @@ NavWaypointToPoseStampedNode::~NavWaypointToPoseStampedNode()
 }
 
 void NavWaypointToPoseStampedNode::waypointSubscribeCallback(
-  const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr & waypoint_msg)
+  const nav_waypoint_msgs::msg::WaypointGoal::ConstSharedPtr & command)
 {
+  if (command->goal_id.empty()) {
+    RCLCPP_WARN(get_logger(), "Rejected goal without goal_id");
+    return;
+  }
+  const auto * waypoint_msg = &command->waypoint;
   geometry_msgs::msg::PoseStamped::UniquePtr pose_msg;
 
   pose_msg = std::make_unique<geometry_msgs::msg::PoseStamped>();
@@ -97,13 +102,15 @@ void NavWaypointToPoseStampedNode::waypointSubscribeCallback(
   }
   pose_msg->header.frame_id = waypoint_msg->frame_id.empty() ? frame_id_ : waypoint_msg->frame_id;
 
-  if (!publish_unchanged_goals_ && last_goal_ && last_goal_->name == waypoint_msg->name &&
-    last_goal_->pose == waypoint_msg->pose &&
-    (last_goal_->frame_id.empty() ? frame_id_ : last_goal_->frame_id) == pose_msg->header.frame_id)
+  if (!publish_unchanged_goals_ && last_goal_ && last_goal_->goal_id == command->goal_id &&
+    last_goal_->waypoint.name == waypoint_msg->name &&
+    last_goal_->waypoint.pose == waypoint_msg->pose &&
+    (last_goal_->waypoint.frame_id.empty() ? frame_id_ : last_goal_->waypoint.frame_id) ==
+    pose_msg->header.frame_id)
   {
     return;
   }
-  last_goal_ = waypoint_msg;
+  last_goal_ = command;
   pose_publisher_->publish(std::move(pose_msg));
 }
 }  // namespace nav_waypoint_conversion
