@@ -13,6 +13,20 @@
   <depend>nav_waypoint_server</depend>
   <depend>nav_waypoint_visualization</depend>
 
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>nav_waypoint_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-yaml</test_depend>
+  <test_depend>geometry_msgs</test_depend>
+  <test_depend>std_msgs</test_depend>
+  <test_depend>tf2_msgs</test_depend>
+  <test_depend>visualization_msgs</test_depend>
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 

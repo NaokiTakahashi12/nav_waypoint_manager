@@ -18,294 +18,347 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-#include <yaml-cpp/yaml.h>
-
+#include <algorithm>
 #include <memory>
+#include <unordered_set>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
+#include <limits>
+#include <stdexcept>
 #include <string>
-#include <functional>
-#include <vector>
-#include <fstream>
 
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <std_srvs/srv/empty.hpp>
-#include <nav_waypoint_msgs/msg/waypoint.hpp>
-#include <nav_waypoint_msgs/msg/waypoints.hpp>
+#include <std_srvs/srv/trigger.hpp>
+#include <nav_waypoint_msgs/msg/route.hpp>
+#include <nav_waypoint_msgs/srv/upsert_waypoint.hpp>
+#include <nav_waypoint_msgs/srv/delete_waypoint.hpp>
+#include <nav_waypoint_msgs/msg/waypoint_route_configuration.hpp>
+#include <nav_waypoint_msgs/srv/set_route.hpp>
+#include <nav_waypoint_msgs/srv/rename_waypoint.hpp>
+#include <nav_waypoint_msgs/validation.hpp>
+#include <nav_waypoint_server/nav_waypoint_server_node_params.hpp>
 
-#include <nav_waypoint_server_node_params.hpp>
+#include "waypoint_route_configuration_io.hpp"
+#include "async_saver.hpp"
 
 namespace nav_waypoint_server
 {
 class NavWaypointServerNode : public rclcpp::Node
 {
 public:
-  explicit NavWaypointServerNode(const rclcpp::NodeOptions &);
-  ~NavWaypointServerNode();
+  explicit NavWaypointServerNode(const rclcpp::NodeOptions & options)
+  : Node("nav_waypoint_server", rclcpp::NodeOptions(options).use_intra_process_comms(false))
+  {
+    param_listener_ = std::make_unique<ParamListener>(get_node_parameters_interface());
+    params_ = param_listener_->get_params();
+    if (params_.waypoint_frame_id.empty() ||
+      !std::isfinite(params_.default_goal_reached_radius) ||
+      params_.default_goal_reached_radius <= 0.0)
+    {
+      throw std::invalid_argument("waypoint_frame_id must not be empty");
+    }
+    configuration_.registered_waypoints.header.frame_id = params_.waypoint_frame_id;
+    if (fileExists(params_.waypoints_file)) {
+      try {
+        configuration_.registered_waypoints = loadWaypoints(params_.waypoints_file);
+      } catch (const std::exception & e) {
+        RCLCPP_ERROR(get_logger(), "Cannot load waypoints: %s", e.what());
+        throw;
+      }
+    } else {
+      RCLCPP_WARN(get_logger(), "Starting with no waypoints: %s", params_.waypoints_file.c_str());
+    }
+    configuration_.route.header.frame_id = params_.waypoint_frame_id;
+    const auto route_path =
+      params_.route_file.empty() ? params_.waypoints_file : params_.route_file;
+    if (fileExists(route_path)) {
+      const auto root = loadConfigurationDocument(route_path, params_.waypoint_frame_id);
+      const auto entries = root["waypoint_manager"]["route"];
+      if (entries) {
+        if (!entries.IsSequence()) {throw std::invalid_argument("route must be a sequence");}
+        for (const auto & entry : entries) {
+          configuration_.route.route.push_back(entry.as<std::string>());
+        }
+      }
+    }
+    validateConfiguredRoute(configuration_.route);
+    configuration_publisher_ = create_publisher<nav_waypoint_msgs::msg::WaypointRouteConfiguration>(
+      "~/configuration", rclcpp::QoS(1).transient_local());
+    registered_waypoints_publisher_ = create_publisher<nav_waypoint_msgs::msg::Waypoints>(
+      "~/waypoints", rclcpp::QoS(1).transient_local());
+    regist_ = create_subscription<nav_waypoint_msgs::msg::Waypoint>(
+      "~/regist", 5, [this](nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr w) {
+        try {
+          upsert(*w, false);
+        } catch (const std::exception & e) {
+          RCLCPP_ERROR(get_logger(), "Rejected waypoint: %s", e.what());
+        }
+      });
+    modify_ = create_subscription<nav_waypoint_msgs::msg::Waypoint>(
+      "~/modify", 5, [this](nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr w) {
+        try {
+          upsert(*w, true);
+        } catch (const std::exception & e) {
+          RCLCPP_ERROR(get_logger(), "Rejected modification: %s", e.what());
+        }
+      });
+    set_route_service_ = create_service<nav_waypoint_msgs::srv::SetRoute>(
+      "~/set_route", [this](nav_waypoint_msgs::srv::SetRoute::Request::ConstSharedPtr req,
+      nav_waypoint_msgs::srv::SetRoute::Response::SharedPtr response) {
+        try {
+          validateConfiguredRoute(req->route);
+          if (configuration_.route.route != req->route.route) {
+            configuration_.route = req->route;
+            configuration_.route.header.frame_id = params_.waypoint_frame_id;
+            publishConfiguration();
+          }
+          response->success = true;
+          response->message = "Route accepted";
+        } catch (const std::exception & e) {response->message = e.what();}
+      });
+    rename_service_ = create_service<nav_waypoint_msgs::srv::RenameWaypoint>(
+      "~/rename", [this](nav_waypoint_msgs::srv::RenameWaypoint::Request::ConstSharedPtr req,
+      nav_waypoint_msgs::srv::RenameWaypoint::Response::SharedPtr response) {
+        auto found = std::find_if(
+          configuration_.registered_waypoints.waypoints.begin(),
+          configuration_.registered_waypoints.waypoints.end(),
+          [&req](const nav_waypoint_msgs::msg::Waypoint & w) {return w.name == req->old_name;});
+        if (found == configuration_.registered_waypoints.waypoints.end() || req->new_name.empty() ||
+        std::any_of(
+          configuration_.registered_waypoints.waypoints.begin(),
+          configuration_.registered_waypoints.waypoints.end(),
+          [&req](const nav_waypoint_msgs::msg::Waypoint & w) {return w.name == req->new_name;}))
+        {
+          response->message = "Old name must exist and new name must be nonempty and unused";
+          return;
+        }
+        found->name = req->new_name;
+        found->stamp = now();
+        for (auto & name : configuration_.route.route) {
+          if (name == req->old_name) {
+            name = req->new_name;
+          }
+        }
+        publishRegisteredWaypointsAndConfiguration();
+        response->success = true;
+        response->message = "Waypoint and all route references renamed";
+      });
+    save_ = create_service<std_srvs::srv::Trigger>(
+      "~/save", [this](rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr service,
+      std::shared_ptr<rmw_request_id_t> header, std_srvs::srv::Trigger::Request::SharedPtr) {
+        const auto snapshot = configuration_;
+        const auto frame = params_.waypoint_frame_id;
+        const auto path = params_.waypoint_route_configuration_save_file.empty() ?
+        params_.waypoints_file : params_.waypoint_route_configuration_save_file;
+        auto reply = [service, header](bool success, const std::string & message) {
+          std_srvs::srv::Trigger::Response response;
+          response.success = success;
+          response.message = message;
+          try {service->send_response(*header, response);} catch (const std::exception &) {}
+        };
+        if (!saver_.submit(
+          [snapshot, frame, path, reply]() {
+            try {
+              saveConfiguration(snapshot, path, frame);
+              reply(true, "Saved configuration");
+            } catch (const std::exception & e) {reply(false, e.what());}
+          })) {reply(false, "Save queue is full; retry later");}
+      });
+    publish_ = create_service<std_srvs::srv::Empty>(
+      "~/publish", [this](std_srvs::srv::Empty::Request::ConstSharedPtr,
+      std_srvs::srv::Empty::Response::SharedPtr) {publishRegisteredWaypointsAndConfiguration();});
+    upsert_service_ = create_service<nav_waypoint_msgs::srv::UpsertWaypoint>(
+      "~/upsert", [this](nav_waypoint_msgs::srv::UpsertWaypoint::Request::ConstSharedPtr request,
+      nav_waypoint_msgs::srv::UpsertWaypoint::Response::SharedPtr response) {
+        try {
+          upsert(request->waypoint, false);
+          response->success = true;
+          response->message = "Waypoint registered or replaced";
+        } catch (const std::exception & e) {
+          response->message = e.what();
+        }
+      });
+    delete_service_ = create_service<nav_waypoint_msgs::srv::DeleteWaypoint>(
+      "~/delete", [this](nav_waypoint_msgs::srv::DeleteWaypoint::Request::ConstSharedPtr request,
+      nav_waypoint_msgs::srv::DeleteWaypoint::Response::SharedPtr response) {
+        if (std::find(
+          configuration_.route.route.begin(), configuration_.route.route.end(),
+          request->name) != configuration_.route.route.end())
+        {
+          response->message = "Remove the waypoint from the route before deleting it";
+          return;
+        }
+        const auto found = std::find_if(
+          configuration_.registered_waypoints.waypoints.begin(),
+          configuration_.registered_waypoints.waypoints.end(),
+          [&request](const nav_waypoint_msgs::msg::Waypoint & w) {return w.name == request->name;});
+        if (found == configuration_.registered_waypoints.waypoints.end()) {
+          response->message = "Unknown waypoint: " + request->name;
+          return;
+        }
+        configuration_.registered_waypoints.waypoints.erase(found);
+        publishRegisteredWaypointsAndConfiguration();
+        response->success = true;
+        response->message = "Deleted waypoint";
+      });
+    publishRegisteredWaypointsAndConfiguration();
+  }
 
 private:
-  nav_waypoint_msgs::msg::Waypoints waypoints_;
-
-  rclcpp::Publisher<nav_waypoint_msgs::msg::Waypoints>::SharedPtr waypoints_publisher_;
-  rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr regist_waypoint_subscriber_;
-  rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr modify_waypoint_subscriber_;
-  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr save_latest_waypoint_service_;
-  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr publish_waypoints_service_;
-
+  nav_waypoint_msgs::msg::WaypointRouteConfiguration configuration_;
+  rclcpp::Publisher<nav_waypoint_msgs::msg::WaypointRouteConfiguration>::SharedPtr
+    configuration_publisher_;
   std::unique_ptr<ParamListener> param_listener_;
-  nav_waypoint_server::Params params_;
+  Params params_;
+  rclcpp::Publisher<nav_waypoint_msgs::msg::Waypoints>::SharedPtr registered_waypoints_publisher_;
+  rclcpp::Subscription<nav_waypoint_msgs::msg::Waypoint>::SharedPtr regist_, modify_;
+  rclcpp::Service<nav_waypoint_msgs::srv::SetRoute>::SharedPtr set_route_service_;
+  rclcpp::Service<nav_waypoint_msgs::srv::RenameWaypoint>::SharedPtr rename_service_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr save_;
+  rclcpp::Service<std_srvs::srv::Empty>::SharedPtr publish_;
+  rclcpp::Service<nav_waypoint_msgs::srv::UpsertWaypoint>::SharedPtr upsert_service_;
+  rclcpp::Service<nav_waypoint_msgs::srv::DeleteWaypoint>::SharedPtr delete_service_;
+  AsyncSaver saver_;
 
-  void registWaypointCallback(
-    const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr &);
-  void modifyWaypointCallback(
-    const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr &);
-  void saveWaypointsServiceCallback(
-    const std_srvs::srv::Empty::Request::ConstSharedPtr &,
-    const std_srvs::srv::Empty::Response::SharedPtr &);
-  void publishWaypointsServiceCallback(
-    const std_srvs::srv::Empty::Request::ConstSharedPtr &,
-    const std_srvs::srv::Empty::Response::SharedPtr &);
+  void publishConfiguration()
+  {
+    configuration_.route.header.stamp = now();
+    configuration_publisher_->publish(configuration_);
+  }
 
-  void publishWaypoints();
-  void saveWaypoints(const nav_waypoint_msgs::msg::Waypoints &);
-  nav_waypoint_msgs::msg::Waypoints loadWaypoints(const std::string & file_path);
-  void tryLoadWaypointsFromFile(const std::string & file_path);
-  bool isLoadableWaypoints(const std::string & file_path);
-};
+  void publishRegisteredWaypointsAndConfiguration()
+  {
+    configuration_.registered_waypoints.header.stamp = now();
+    publishConfiguration();
+    registered_waypoints_publisher_->publish(configuration_.registered_waypoints);
+  }
 
-NavWaypointServerNode::NavWaypointServerNode(const rclcpp::NodeOptions & node_options)
-: rclcpp::Node("nav_waypoint_server",
-    rclcpp::NodeOptions(node_options).use_intra_process_comms(false)),
-  waypoints_(),
-  waypoints_publisher_(nullptr),
-  regist_waypoint_subscriber_(nullptr),
-  modify_waypoint_subscriber_(nullptr),
-  save_latest_waypoint_service_(nullptr),
-  publish_waypoints_service_(nullptr),
-  param_listener_(nullptr)
-{
-  RCLCPP_INFO_STREAM(this->get_logger(), "Start initialize " << this->get_name());
-
-  param_listener_ = std::make_unique<ParamListener>(
-    this->get_node_parameters_interface()
-  );
-  params_ = param_listener_->get_params();
-  tryLoadWaypointsFromFile(params_.waypoints_file);
-
-  waypoints_.header.stamp = this->get_clock()->now();
-  waypoints_.header.frame_id = params_.waypoint_frame_id;
-
-  waypoints_publisher_ = this->create_publisher<nav_waypoint_msgs::msg::Waypoints>(
-    "~/waypoints",
-    rclcpp::QoS(5).transient_local()
-  );
-  regist_waypoint_subscriber_ = this->create_subscription<nav_waypoint_msgs::msg::Waypoint>(
-    "~/regist",
-    rclcpp::QoS(5),
-    std::bind(
-      &NavWaypointServerNode::registWaypointCallback,
-      this,
-      std::placeholders::_1
-    )
-  );
-  modify_waypoint_subscriber_ = this->create_subscription<nav_waypoint_msgs::msg::Waypoint>(
-    "~/modify",
-    rclcpp::QoS(5),
-    std::bind(
-      &NavWaypointServerNode::modifyWaypointCallback,
-      this,
-      std::placeholders::_1
-    )
-  );
-  save_latest_waypoint_service_ = this->create_service<std_srvs::srv::Empty>(
-    "~/save",
-    std::bind(
-      &NavWaypointServerNode::saveWaypointsServiceCallback,
-      this,
-      std::placeholders::_1,
-      std::placeholders::_2
-    )
-  );
-  publish_waypoints_service_ = this->create_service<std_srvs::srv::Empty>(
-    "~/publish",
-    std::bind(
-      &NavWaypointServerNode::publishWaypointsServiceCallback,
-      this,
-      std::placeholders::_1,
-      std::placeholders::_2
-    )
-  );
-  RCLCPP_INFO_STREAM(this->get_logger(), "Initialize successfully " << this->get_name());
-  //! Publish loaded waypoints
-  publishWaypoints();
-}
-
-NavWaypointServerNode::~NavWaypointServerNode()
-{
-  RCLCPP_INFO_STREAM(this->get_logger(), "Finish " << this->get_name());
-}
-
-void NavWaypointServerNode::registWaypointCallback(
-  const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr & msg)
-{
-  bool overwrited = false;
-  RCLCPP_INFO(this->get_logger(), "Recived new waypoint");
-
-  for (auto && waypoint : waypoints_.waypoints) {
-    if (waypoint.name == msg->name) {
-      RCLCPP_INFO_STREAM(this->get_logger(), "Overwrite waypoint: " << msg->name);
-      waypoint = *msg;
-      overwrited = true;
-      break;
+  void validateConfiguredRoute(const nav_waypoint_msgs::msg::Route & route) const
+  {
+    auto proposed_configuration = configuration_;
+    proposed_configuration.route = route;
+    if (proposed_configuration.route.header.frame_id.empty()) {
+      proposed_configuration.route.header.frame_id = params_.waypoint_frame_id;
     }
+    nav_waypoint_msgs::resolveRouteWaypoints(proposed_configuration, params_.waypoint_frame_id);
   }
-  if (!overwrited) {
-    waypoints_.waypoints.push_back(*msg);
-  }
-  waypoints_.header.stamp = this->get_clock()->now();
-  publishWaypoints();
-  RCLCPP_INFO_STREAM(this->get_logger(), "Registed new waypoint: " << msg->name);
-}
 
-void NavWaypointServerNode::modifyWaypointCallback(
-  const nav_waypoint_msgs::msg::Waypoint::ConstSharedPtr & msg)
-{
-  bool found_waypoint = false;
-  for (auto && waypoint : waypoints_.waypoints) {
-    if (waypoint.name != msg->name) {
-      continue;
-    }
-    waypoint = *msg;
-    found_waypoint = true;
-    break;
-  }
-  if (!found_waypoint) {
-    RCLCPP_WARN_STREAM(this->get_logger(), "Ignore waypoint " << msg->name);
-  } else {
-    publishWaypoints();
-  }
-}
-
-void NavWaypointServerNode::saveWaypointsServiceCallback(
-  const std_srvs::srv::Empty::Request::ConstSharedPtr &,
-  const std_srvs::srv::Empty::Response::SharedPtr &)
-{
-  RCLCPP_INFO(this->get_logger(), "Start save waypoints");
-  saveWaypoints(waypoints_);
-  RCLCPP_INFO(this->get_logger(), "Save waypoints successfully");
-}
-
-void NavWaypointServerNode::publishWaypointsServiceCallback(
-  const std_srvs::srv::Empty::Request::ConstSharedPtr &,
-  const std_srvs::srv::Empty::Response::SharedPtr &)
-{
-  publishWaypoints();
-}
-
-void NavWaypointServerNode::publishWaypoints()
-{
-  nav_waypoint_msgs::msg::Waypoints::UniquePtr msg;
-  msg = std::make_unique<nav_waypoint_msgs::msg::Waypoints>(waypoints_);
-  waypoints_publisher_->publish(std::move(msg));
-  RCLCPP_INFO_STREAM(this->get_logger(), "Publish waypoints");
-}
-
-void NavWaypointServerNode::saveWaypoints(const nav_waypoint_msgs::msg::Waypoints & waypoints)
-{
-  //! @todo refactoring
-  YAML::Node waypoints_yaml_node{};
-
-  for (const auto & waypoint : waypoints.waypoints) {
-    YAML::Node local_yaml_node;
-    YAML::Node pose_yaml_node;
-    YAML::Node position_yaml_node;
-    YAML::Node orientation_yaml_node;
-    YAML::Node properties_yaml_node;
-
-    position_yaml_node["x"] = waypoint.pose.position.x;
-    position_yaml_node["y"] = waypoint.pose.position.y;
-    position_yaml_node["z"] = waypoint.pose.position.z;
-    pose_yaml_node["position"] = position_yaml_node;
-    orientation_yaml_node["x"] = waypoint.pose.orientation.x;
-    orientation_yaml_node["y"] = waypoint.pose.orientation.y;
-    orientation_yaml_node["z"] = waypoint.pose.orientation.z;
-    orientation_yaml_node["w"] = waypoint.pose.orientation.w;
-    pose_yaml_node["orientation"] = orientation_yaml_node;
-    local_yaml_node["pose"] = pose_yaml_node;
-
-    for (const auto & property : waypoint.properties) {
-      properties_yaml_node[property.key] = property.value;
-    }
-    local_yaml_node["properties"] = properties_yaml_node;
-
-    waypoints_yaml_node[waypoint.name] = local_yaml_node;
-  }
-  YAML::Node waypoint_manager_yaml_node;
-  YAML::Emitter yaml_emitter;
-
-  waypoint_manager_yaml_node["waypoint_manager"]["waypoints"] = waypoints_yaml_node;
-  yaml_emitter << waypoint_manager_yaml_node;
-
-  std::ofstream waypoints_file;
-  waypoints_file.open(params_.waypoints_file);
-
-  if (!waypoints_file.is_open()) {
-    RCLCPP_ERROR_STREAM(this->get_logger(), "Can't open file " << params_.waypoints_file);
-    return;
-  }
-  waypoints_file << yaml_emitter.c_str();
-  waypoints_file.close();
-}
-
-nav_waypoint_msgs::msg::Waypoints NavWaypointServerNode::loadWaypoints(
-  const std::string & file_path)
-{
-  nav_waypoint_msgs::msg::Waypoints ret_waypoints{};
-
-  //! @todo refactoring
-  YAML::Node yaml_node = YAML::LoadFile(file_path);
-  YAML::Node waypoint_manager_yaml_node = yaml_node["waypoint_manager"];
-  YAML::Node waypoints_yaml_node = waypoint_manager_yaml_node["waypoints"];
-
-  for (auto itr = waypoints_yaml_node.begin(); itr != waypoints_yaml_node.end(); ++itr) {
-    nav_waypoint_msgs::msg::Waypoint w;
-    w.name = itr->first.as<std::string>();
-    w.pose.position.x = itr->second["pose"]["position"]["x"].as<double>();
-    w.pose.position.y = itr->second["pose"]["position"]["y"].as<double>();
-    w.pose.position.z = itr->second["pose"]["position"]["z"].as<double>();
-    w.pose.orientation.x = itr->second["pose"]["orientation"]["x"].as<double>();
-    w.pose.orientation.y = itr->second["pose"]["orientation"]["y"].as<double>();
-    w.pose.orientation.z = itr->second["pose"]["orientation"]["z"].as<double>();
-    w.pose.orientation.w = itr->second["pose"]["orientation"]["w"].as<double>();
-    const auto pbegin = itr->second["properties"].begin();
-    const auto pend = itr->second["properties"].end();
-    for (auto pitr = pbegin; pitr != pend; ++pitr) {
+  void normalize(nav_waypoint_msgs::msg::Waypoint & w) const
+  {
+    if (std::none_of(
+        w.properties.begin(), w.properties.end(),
+        [](const nav_waypoint_msgs::msg::Property & p) {return p.key == "goal_reached_radius";}))
+    {
       nav_waypoint_msgs::msg::Property p;
-      p.key = pitr->first.as<std::string>();
-      p.value = pitr->second.as<std::string>();
+      p.key = "goal_reached_radius";
+      std::ostringstream value;
+      value << std::setprecision(std::numeric_limits<double>::max_digits10) <<
+        params_.default_goal_reached_radius;
+      p.value = value.str();
       w.properties.push_back(p);
     }
-    ret_waypoints.waypoints.push_back(w);
+    std::sort(
+      w.properties.begin(), w.properties.end(),
+      [](const nav_waypoint_msgs::msg::Property & a, const nav_waypoint_msgs::msg::Property & b) {
+        return a.key < b.key;
+      });
   }
-  return ret_waypoints;
-}
 
-void NavWaypointServerNode::tryLoadWaypointsFromFile(const std::string & file_path)
-{
-  if (isLoadableWaypoints(file_path)) {
-    waypoints_ = loadWaypoints(file_path);
-  } else {
-    RCLCPP_WARN_STREAM(this->get_logger(), "Can't open waypoints file: " << file_path);
+  void upsert(nav_waypoint_msgs::msg::Waypoint w, bool require_existing)
+  {
+    nav_waypoint_msgs::validateWaypoint(w, params_.waypoint_frame_id);
+    normalize(w);
+    w.frame_id = params_.waypoint_frame_id;
+    w.stamp = now();
+    auto found = std::find_if(
+      configuration_.registered_waypoints.waypoints.begin(),
+      configuration_.registered_waypoints.waypoints.end(),
+      [&w](const nav_waypoint_msgs::msg::Waypoint & current) {return current.name == w.name;});
+    if (found == configuration_.registered_waypoints.waypoints.end()) {
+      if (require_existing) {
+        throw std::invalid_argument("Unknown waypoint: " + w.name);
+      }
+      configuration_.registered_waypoints.waypoints.push_back(w);
+    } else {
+      if (nav_waypoint_msgs::sameWaypoint(*found, w)) {return;}
+      *found = w;
+    }
+    publishRegisteredWaypointsAndConfiguration();
   }
-}
 
-bool NavWaypointServerNode::isLoadableWaypoints(const std::string & file_path)
-{
-  std::ifstream file;
-  file.open(file_path);
-  const bool is_open = file.is_open();
-  file.close();
-  return is_open;
-}
+  nav_waypoint_msgs::msg::Waypoints loadWaypoints(const std::string & path)
+  {
+    const auto root = loadConfigurationDocument(path, params_.waypoint_frame_id);
+    const auto entries = root["waypoint_manager"]["waypoints"];
+    if (!entries || !entries.IsMap()) {
+      throw std::invalid_argument("waypoints must be a mapping");
+    }
+    nav_waypoint_msgs::msg::Waypoints result;
+    result.header.frame_id = params_.waypoint_frame_id;
+    for (const auto & entry : entries) {
+      nav_waypoint_msgs::msg::Waypoint w;
+      w.name = entry.first.as<std::string>();
+      w.frame_id = params_.waypoint_frame_id;
+      const auto pose = entry.second["pose"];
+      w.pose.position.x = pose["position"]["x"].as<double>();
+      w.pose.position.y = pose["position"]["y"].as<double>();
+      w.pose.position.z = pose["position"]["z"].as<double>();
+      w.pose.orientation.x = pose["orientation"]["x"].as<double>();
+      w.pose.orientation.y = pose["orientation"]["y"].as<double>();
+      w.pose.orientation.z = pose["orientation"]["z"].as<double>();
+      w.pose.orientation.w = pose["orientation"]["w"].as<double>();
+      const auto properties = entry.second["properties"];
+      if (properties && !properties.IsNull()) {
+        if (!properties.IsMap()) {
+          throw std::invalid_argument("properties must be a mapping: " + w.name);
+        }
+        for (const auto & property : properties) {
+          nav_waypoint_msgs::msg::Property p;
+          p.key = property.first.as<std::string>();
+          p.value = property.second.as<std::string>();
+          w.properties.push_back(p);
+        }
+      }
+      normalize(w);
+      result.waypoints.push_back(w);
+    }
+    nav_waypoint_msgs::validateWaypoints(result, params_.waypoint_frame_id);
+    return result;
+  }
+
+  static void saveConfiguration(
+    const nav_waypoint_msgs::msg::WaypointRouteConfiguration & snapshot,
+    const std::string & path, const std::string & frame)
+  {
+    nav_waypoint_msgs::resolveRouteWaypoints(snapshot, frame);
+    auto root = prepareConfigurationDocumentForSave(path, frame);
+    YAML::Node entries(YAML::NodeType::Map);
+    for (const auto & w : snapshot.registered_waypoints.waypoints) {
+      YAML::Node entry;
+      entry["pose"]["position"]["x"] = w.pose.position.x;
+      entry["pose"]["position"]["y"] = w.pose.position.y;
+      entry["pose"]["position"]["z"] = w.pose.position.z;
+      entry["pose"]["orientation"]["x"] = w.pose.orientation.x;
+      entry["pose"]["orientation"]["y"] = w.pose.orientation.y;
+      entry["pose"]["orientation"]["z"] = w.pose.orientation.z;
+      entry["pose"]["orientation"]["w"] = w.pose.orientation.w;
+      YAML::Node properties(YAML::NodeType::Map);
+      for (const auto & property : w.properties) {
+        properties[property.key] = property.value;
+      }
+      entry["properties"] = properties;
+      entries[w.name] = entry;
+    }
+    root["waypoint_manager"]["waypoints"] = entries;
+    YAML::Node names(YAML::NodeType::Sequence);
+    for (const auto & name : snapshot.route.route) {names.push_back(name);}
+    root["waypoint_manager"]["route"] = names;
+    atomicSave(path, root);
+  }
+};
 }  // namespace nav_waypoint_server
 
 RCLCPP_COMPONENTS_REGISTER_NODE(nav_waypoint_server::NavWaypointServerNode)

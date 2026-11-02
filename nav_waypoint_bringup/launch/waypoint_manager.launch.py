@@ -28,6 +28,10 @@ import launch_ros
 
 
 def generate_launch_description():
+    data_dir = os.path.join(
+        os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share')),
+        'nav_waypoint_manager')
+    os.makedirs(data_dir, exist_ok=True)
     this_pkg_share_dir = get_package_share_directory('nav_waypoint_bringup')
 
     waypoint_frame_id_param = {
@@ -38,6 +42,10 @@ def generate_launch_description():
     }
     route_file_param = {
         'route_file': launch.substitutions.LaunchConfiguration('route_file')
+    }
+    waypoint_route_configuration_save_file_param = {
+        'waypoint_route_configuration_save_file':
+            launch.substitutions.LaunchConfiguration('waypoint_route_configuration_save_file')
     }
     use_sim_time_param = {
         'use_sim_time': launch.substitutions.LaunchConfiguration('use_sim_time')
@@ -69,6 +77,14 @@ def generate_launch_description():
             )
         ),
         launch.actions.DeclareLaunchArgument(
+            'waypoint_route_configuration_save_file',
+            default_value=os.path.join(data_dir, 'waypoint_route_configuration.yaml')
+        ),
+        launch.actions.DeclareLaunchArgument('reach_position_threshold', default_value='1.0'),
+        launch.actions.DeclareLaunchArgument('max_transform_age', default_value='1.0'),
+        launch.actions.DeclareLaunchArgument('publish_unchanged_goals', default_value='true'),
+        launch.actions.DeclareLaunchArgument('use_rviz', default_value='false'),
+        launch.actions.DeclareLaunchArgument(
             'use_sim_time',
             default_value='false'
         ),
@@ -84,6 +100,12 @@ def generate_launch_description():
                         parameters=[
                             waypoint_frame_id_param,
                             waypoints_file_param,
+                            waypoint_route_configuration_save_file_param,
+                            route_file_param,
+                            {'default_goal_reached_radius':
+                             launch_ros.parameter_descriptions.ParameterValue(
+                                 launch.substitutions.LaunchConfiguration(
+                                     'reach_position_threshold'), value_type=float)},
                             use_sim_time_param
                         ],
                         on_exit=shutdown_event
@@ -97,7 +119,12 @@ def generate_launch_description():
                 output='screen',
                 parameters=[
                     waypoint_frame_id_param,
-                    route_file_param,
+                    {'reach_position_threshold': launch_ros.parameter_descriptions.ParameterValue(
+                        launch.substitutions.LaunchConfiguration('reach_position_threshold'),
+                        value_type=float)},
+                    {'max_transform_age': launch_ros.parameter_descriptions.ParameterValue(
+                        launch.substitutions.LaunchConfiguration('max_transform_age'),
+                        value_type=float)},
                     use_sim_time_param
                 ],
                 on_exit=shutdown_event
@@ -128,6 +155,7 @@ def generate_launch_description():
                 name='pose_stamped_to_nav_waypoint',
                 output='screen',
                 parameters=[
+                    waypoint_frame_id_param,
                     use_sim_time_param
                 ],
                 remappings=[
@@ -142,6 +170,10 @@ def generate_launch_description():
                 name='nav_waypoint_to_pose_stamped',
                 output='screen',
                 parameters=[
+                    waypoint_frame_id_param,
+                    {'publish_unchanged_goals': launch_ros.parameter_descriptions.ParameterValue(
+                        launch.substitutions.LaunchConfiguration('publish_unchanged_goals'),
+                        value_type=bool)},
                     use_sim_time_param
                 ],
                 remappings=[
@@ -149,6 +181,14 @@ def generate_launch_description():
                     ('~/output_pose', '/goal_pose')
                 ],
                 on_exit=shutdown_event
+            ),
+            launch_ros.actions.Node(
+                package='rviz2', executable='rviz2',
+                arguments=['-d', os.path.join(this_pkg_share_dir, 'rviz', 'waypoint.rviz'),
+                           '-f', launch.substitutions.LaunchConfiguration('waypoint_frame_id')],
+                parameters=[use_sim_time_param],
+                condition=launch.conditions.IfCondition(
+                    launch.substitutions.LaunchConfiguration('use_rviz'))
             )
         ])
     ])

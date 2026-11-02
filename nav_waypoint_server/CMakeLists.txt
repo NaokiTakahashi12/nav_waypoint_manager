@@ -10,6 +10,7 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 # find dependencies
+find_package(Threads REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_auto REQUIRED)
 
@@ -34,6 +35,7 @@ generate_parameter_library(nav_route_server_node_params
   src/nav_route_server_node_params.yaml
 )
 target_link_libraries(${PROJECT_NAME}
+  Threads::Threads
   nav_waypoint_server_node_params
   nav_route_server_node_params
 )
