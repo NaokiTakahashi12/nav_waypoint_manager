@@ -21,6 +21,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   msg/RouteProgress.msg
   srv/SetRoute.srv
   srv/UpsertWaypoint.srv
+  srv/UpdateWaypointPose.srv
+  srv/UpdateWaypoint.srv
   srv/DeleteWaypoint.srv
   srv/RenameWaypoint.srv
   msg/WaypointRouteConfiguration.msg

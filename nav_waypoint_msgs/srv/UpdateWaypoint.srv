@@ -1,0 +1,7 @@
+# Compare-and-replace an existing waypoint. Rename uses RenameWaypoint instead.
+nav_waypoint_msgs/Waypoint expected_waypoint
+nav_waypoint_msgs/Waypoint waypoint
+---
+bool success
+string message
+nav_waypoint_msgs/WaypointRouteConfiguration configuration

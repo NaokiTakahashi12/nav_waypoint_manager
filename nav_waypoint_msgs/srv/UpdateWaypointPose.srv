@@ -1,0 +1,7 @@
+string name
+string frame_id
+geometry_msgs/Pose pose
+geometry_msgs/Pose expected_pose
+---
+bool success
+string message
