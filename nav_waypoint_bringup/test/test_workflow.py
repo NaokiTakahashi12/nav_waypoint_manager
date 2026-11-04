@@ -36,7 +36,8 @@ import yaml
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_waypoint_msgs.msg import (
     WaypointRouteConfiguration, Property, Route, RouteProgress, Waypoint, WaypointGoal, Waypoints)
-from nav_waypoint_msgs.srv import DeleteWaypoint, RenameWaypoint, SetRoute, UpsertWaypoint
+from nav_waypoint_msgs.srv import (
+    DeleteWaypoint, RenameWaypoint, SetRoute, UpdateWaypoint, UpdateWaypointPose, UpsertWaypoint)
 from std_msgs.msg import Bool
 from std_srvs.srv import Empty, Trigger
 from tf2_msgs.msg import TFMessage
@@ -198,7 +199,7 @@ class WorkflowTest(unittest.TestCase):
         route = Route(route=names)
         route.header.frame_id = 'warehouse'
         response = cls.call(SetRoute, '/nav_waypoint_server/set_route',
-                            SetRoute.Request(route=route))
+                            SetRoute.Request(route=route, expected_route=cls.messages['route']))
         assert response.success, response.message
         cls.wait(lambda: cls.messages['route'].route == names)
         cls.spin(0.15)
@@ -551,7 +552,9 @@ class WorkflowTest(unittest.TestCase):
             self.spawn('nav_waypoint_server', 'nav_waypoint_server_node',
                        name='restart_data', waypoints_file=str(path))
             self.assertTrue(self.call(SetRoute, '/restart_data/set_route',
-                                      SetRoute.Request(route=Route(route=[]))).success)
+                                      SetRoute.Request(
+                                          route=Route(route=[]),
+                                          expected_route=Route(route=['restart']))).success)
             self.wait(lambda: progress[-1].state == 'empty')
             self.assertTrue(self.call(DeleteWaypoint, '/restart_data/delete',
                                       DeleteWaypoint.Request(name='restart')).success)
@@ -632,6 +635,53 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(self.messages['waypoints'].header.stamp, registry_stamp)
         self.route([])
         self.assertEqual(self.messages['waypoints'].header.stamp, registry_stamp)
+
+    def test_pose_update_preserves_properties_and_rejects_unknown_names(self):
+        original = self.waypoint('pose_update', 5, stop=True)
+        request = UpdateWaypointPose.Request(name=original.name, frame_id='warehouse')
+        request.pose = copy.deepcopy(original.pose)
+        request.expected_pose = copy.deepcopy(original.pose)
+        request.pose.position.x = 8.0
+        result = self.call(UpdateWaypointPose, '/nav_waypoint_server/update_pose', request)
+        self.assertTrue(result.success, result.message)
+        self.wait(lambda: any(w.name == original.name and w.pose.position.x == 8.0
+                              for w in self.messages['waypoints'].waypoints))
+        updated = next(w for w in self.messages['waypoints'].waypoints if w.name == original.name)
+        self.assertEqual(updated.properties, original.properties)
+        request.name = 'missing_pose_target'
+        self.assertFalse(self.call(UpdateWaypointPose, '/nav_waypoint_server/update_pose',
+                                   request).success)
+        request.name = original.name
+        request.frame_id = 'wrong_frame'
+        self.assertFalse(self.call(UpdateWaypointPose, '/nav_waypoint_server/update_pose',
+                                   request).success)
+
+    def test_compare_and_replace_rejects_stale_edits_and_deleted_points(self):
+        original = self.waypoint('compare_point', 5)
+        original = copy.deepcopy(next(w for w in self.messages['waypoints'].waypoints
+                                      if w.name == original.name))
+        desired = copy.deepcopy(original)
+        desired.pose.position.x = 6.0
+        request = UpdateWaypoint.Request(expected_waypoint=original, waypoint=desired)
+        result = self.call(UpdateWaypoint, '/nav_waypoint_server/update', request)
+        self.assertTrue(result.success, result.message)
+        self.assertTrue(result.configuration.source_id)
+        self.assertGreater(result.configuration.revision, 0)
+        self.assertFalse(self.call(UpdateWaypoint, '/nav_waypoint_server/update', request).success)
+        stale_pose = UpdateWaypointPose.Request(
+            name=original.name, frame_id='warehouse',
+            pose=desired.pose, expected_pose=original.pose)
+        self.assertFalse(self.call(UpdateWaypointPose, '/nav_waypoint_server/update_pose',
+                                   stale_pose).success)
+        self.assertTrue(self.call(DeleteWaypoint, '/nav_waypoint_server/delete',
+                                  DeleteWaypoint.Request(name=original.name)).success)
+        self.assertFalse(self.call(UpdateWaypoint, '/nav_waypoint_server/update', request).success)
+        self.waypoint('compare_route', 5)
+        self.route(['compare_route'])
+        route_request = SetRoute.Request(route=Route(route=[]),
+                                         expected_route=Route(route=['old_route']))
+        self.assertFalse(self.call(SetRoute, '/nav_waypoint_server/set_route',
+                                   route_request).success)
 
     def test_invalid_edits_and_routes_are_rejected(self):
         valid = self.waypoint('valid', 5)
@@ -743,8 +793,9 @@ class WorkflowTest(unittest.TestCase):
             self.wait(lambda: any(
                 w.name == 'marker' and w.pose.position.x == 7.0
                 for w in self.messages['waypoints'].waypoints))
-            self.wait(lambda: bool(self.history['modifications']))
-            self.assertEqual(self.history['modifications'][-1].properties[0].value, '0.5')
+            updated = next(w for w in self.messages['waypoints'].waypoints if w.name == 'marker')
+            self.assertTrue(any(p.key == 'goal_reached_radius' and p.value == '0.5'
+                                for p in updated.properties))
             pose = PoseStamped()
             pose.header.frame_id = 'warehouse'
             pose.pose.position.x = 8.0

@@ -15,7 +15,17 @@ ros2 launch nav_waypoint_bringup waypoint_manager.launch.py use_rviz:=true
 
 Connect your navigation system to `/goal_pose` (`geometry_msgs/msg/PoseStamped`) and provide TF from `map` to `base_link`. Match `waypoint_frame_id` to your map frame.
 
-Use RViz **SetGoal** to register a waypoint, or drag its marker to edit it. Use the CLI to register named points and set their visit order:
+Use **Add Waypoint** (shortcut **W**) to place a point and set its heading. **SetGoal** remains a navigation command. Drag waypoint markers to reposition them.
+
+In the **Waypoint Editor** panel, select a registered point to edit its pose (metres/radians), reach radius or resume requirement, then click **Apply Waypoint**. Use **Rename** or **Delete Waypoint** for the selected point. A referenced point must first be removed from the route.
+
+Build the visit order with **Append Selected**, **Up**, **Down** and **Remove Visit**, then click **Apply Route**. Repeated visits are allowed. **Reload / Discard Edits** restores server values. Click **Save Waypoints and Route** to save applied changes to the configured file; RViz's own Save Config saves the display layout only. Operation results appear below the panel. Failed marker updates restore the committed pose and show the reason in the marker label.
+
+Waypoint and route edits can be applied independently. If another edit conflicts, reload before retrying. Numeric fields accept scientific notation.
+
+For a different server, enter its node name (for example `/robot1/nav_waypoint_server`) and click **Connect / Discard Edits**. Set the Add Waypoint tool's **Waypoint Topic** to the registration converter's input topic. These connection settings are saved with the RViz configuration.
+
+The CLI is also available:
 
 ```bash
 ros2 run nav_waypoint_bringup waypoint_edit upsert entrance --position 1 0 0 --yaw 0
