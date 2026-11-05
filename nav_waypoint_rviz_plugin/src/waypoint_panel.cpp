@@ -55,7 +55,7 @@ template<class Service>
 void WaypointPanel::request(
   std::shared_ptr<rclcpp::Client<Service>> client,
   typename Service::Request::SharedPtr message,
-  std::function<void(const typename Service::Response &)> accepted)
+  std::function<bool(const typename Service::Response &)> accepted)
 {
   if (poll_request_) {return;}
   try {
@@ -71,8 +71,9 @@ void WaypointPanel::request(
         }
         if (future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {return false;}
         const auto response = future.get();
-        if (response->success && accepted) {accepted(*response);}
-        status_->setText(QString::fromStdString(response->message));
+        if (!response->success || !accepted || accepted(*response)) {
+          status_->setText(QString::fromStdString(response->message));
+        }
         return true;
       };
     deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -92,10 +93,20 @@ void WaypointPanel::mutate(
 {
   request<Service>(
     client, message, [this, edit](const typename Service::Response & response) {
-      adoptConfiguration(std::make_shared<Configuration>(response.configuration));
-      if (edit == AppliedEdit::Waypoint) {form_dirty_ = false;}
+      if (adoptConfiguration(std::make_shared<Configuration>(response.configuration)) ==
+      ConfigurationResult::RetiredSource)
+      {
+        status_->setText(
+          "Server changed; previous server response ignored. Apply or discard edits.");
+        return false;
+      }
+      if (edit == AppliedEdit::Waypoint) {
+        form_dirty_ = false;
+        edited_ = nav_waypoint_msgs::msg::Waypoint{};
+      }
       if (edit == AppliedEdit::Route) {route_dirty_ = false;}
       refresh();
+      return true;
     });
 }
 
@@ -203,7 +214,7 @@ WaypointPanel::WaypointPanel(QWidget * parent)
     row, "Reload / Discard Edits", [this]() {
       form_dirty_ = false;
       route_dirty_ = false;
-      edited_ = {};
+      edited_ = nav_waypoint_msgs::msg::Waypoint{};
       refresh();
     });
   button(row, "Save Waypoints and Route", [this]() {saveConfiguration();});
@@ -270,7 +281,7 @@ void WaypointPanel::connectServer()
   if (cancel_request_) {cancel_request_();}
   poll_request_ = {}; cancel_request_ = {};  subscription_.reset();
   configuration_.reset(); inbox_ = std::make_shared<Inbox>(); retired_sources_.clear();
-  form_dirty_ = false; route_dirty_ = false; edited_ = {};
+  form_dirty_ = false; route_dirty_ = false; edited_ = nav_waypoint_msgs::msg::Waypoint{};
   waypoints_->clear(); route_->clear(); name_->clear();
   server_prefix_ = server_namespace_->text().trimmed().toStdString();
   while (server_prefix_.size() > 1 && server_prefix_.back() == '/') {server_prefix_.pop_back();}
@@ -300,6 +311,12 @@ void WaypointPanel::connectServer()
 
 void WaypointPanel::tick()
 {
+  Configuration::ConstSharedPtr latest;
+  {
+    std::lock_guard<std::mutex> lock(inbox_->mutex);
+    latest = inbox_->latest;
+  }
+  if (latest && adoptConfiguration(latest) == ConfigurationResult::Updated) {refresh();}
   if (poll_request_) {
     try {
       if (poll_request_()) {
@@ -315,26 +332,21 @@ void WaypointPanel::tick()
       status_->setText(QString::fromUtf8(e.what()));
     }
   }
-  Configuration::ConstSharedPtr latest;
-  {
-    std::lock_guard<std::mutex> lock(inbox_->mutex);
-    latest = inbox_->latest;
-  }
-  if (latest) {adoptConfiguration(latest);}
   controls_->setEnabled(configuration_ && !poll_request_);
 }
-void WaypointPanel::adoptConfiguration(Configuration::ConstSharedPtr next)
+WaypointPanel::ConfigurationResult WaypointPanel::adoptConfiguration(
+  Configuration::ConstSharedPtr next)
 {
   if (configuration_) {
     if (configuration_->source_id == next->source_id) {
-      if (next->revision <= configuration_->revision) {return;}
+      if (next->revision <= configuration_->revision) {return ConfigurationResult::Unchanged;}
     } else {
-      if (retired_sources_.count(next->source_id)) {return;}
+      if (retired_sources_.count(next->source_id)) {return ConfigurationResult::RetiredSource;}
       retired_sources_.insert(configuration_->source_id);
     }
   } else {status_->setText("Ready. Use Add Waypoint to place a point.");}
   configuration_ = next;
-  refresh();
+  return ConfigurationResult::Updated;
 }
 
 // Modify only changed rows; preserve the selection and scroll position on pose-only updates.
@@ -356,6 +368,7 @@ void WaypointPanel::refresh()
 {
   if (!configuration_) {return;}
   const auto selected = name_->text();
+  const auto selected_name = selected.toStdString();
   std::vector<std::string> names;
   for (const auto & w : configuration_->registered_waypoints.waypoints) {
     names.push_back(w.name);
@@ -374,7 +387,7 @@ void WaypointPanel::refresh()
     const auto found = std::find_if(
       configuration_->registered_waypoints.waypoints.begin(),
       configuration_->registered_waypoints.waypoints.end(),
-      [&selected](const auto & w) {return w.name == selected.toStdString();});
+      [&selected_name](const auto & w) {return w.name == selected_name;});
     if (found == configuration_->registered_waypoints.waypoints.end() ||
       !nav_waypoint_msgs::sameWaypoint(*found, edited_)) {selectWaypoint();}
   }
@@ -428,17 +441,18 @@ void WaypointPanel::applyWaypoint()
     status_->setText("Select a waypoint first");
     return;
   }
-  for (const auto input : pose_) {
+  std::array<double, 6> pose_values;
+  for (std::size_t i = 0; i < pose_.size(); ++i) {
     bool ok = false;
-    const auto value = input->text().toDouble(&ok);
-    if (!input->hasAcceptableInput() || !ok || !std::isfinite(value)) {
+    pose_values[i] = pose_[i]->text().toDouble(&ok);
+    if (!pose_[i]->hasAcceptableInput() || !ok || !std::isfinite(pose_values[i])) {
       status_->setText("Enter finite coordinates and angles"); return;
     }
   }
   bool radius_ok = false;
   const auto radius_value = radius_->text().toDouble(&radius_ok);
-  if (!radius_ok || !radius_->hasAcceptableInput() || !std::isfinite(radius_->text().toDouble()) ||
-    radius_->text().toDouble() <= 0.0)
+  if (!radius_ok || !radius_->hasAcceptableInput() || !std::isfinite(radius_value) ||
+    radius_value <= 0.0)
   {
     status_->setText("Reach radius must be finite and positive"); return;
   }
@@ -458,18 +472,18 @@ void WaypointPanel::applyWaypoint()
   message->expected_waypoint = edited_;
   message->waypoint = edited_;
   auto & w = message->waypoint;
-  if (pose_edited_[0]) {w.pose.position.x = pose_[0]->text().toDouble();}
-  if (pose_edited_[1]) {w.pose.position.y = pose_[1]->text().toDouble();}
-  if (pose_edited_[2]) {w.pose.position.z = pose_[2]->text().toDouble();}
+  if (pose_edited_[0]) {w.pose.position.x = pose_values[0];}
+  if (pose_edited_[1]) {w.pose.position.y = pose_values[1];}
+  if (pose_edited_[2]) {w.pose.position.z = pose_values[2];}
   if (pose_edited_[3] || pose_edited_[4] || pose_edited_[5]) {
     tf2::Quaternion q;
     tf2::fromMsg(w.pose.orientation, q);
     double roll, pitch, yaw;
     tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
     q.setRPY(
-      pose_edited_[3] ? pose_[3]->text().toDouble() : roll,
-      pose_edited_[4] ? pose_[4]->text().toDouble() : pitch,
-      pose_edited_[5] ? pose_[5]->text().toDouble() : yaw);
+      pose_edited_[3] ? pose_values[3] : roll,
+      pose_edited_[4] ? pose_values[4] : pitch,
+      pose_edited_[5] ? pose_values[5] : yaw);
     w.pose.orientation = tf2::toMsg(q);
   }
   auto setProperty = [&w](const std::string & key, const std::string & value) {
@@ -487,7 +501,7 @@ void WaypointPanel::applyWaypoint()
   if (radius_edited_) {
     setProperty(
       "goal_reached_radius",
-      QString::number(radius_->text().toDouble(), 'g', 17).toStdString());
+      QString::number(radius_value, 'g', 17).toStdString());
   }
   setProperty("stop_with_resume", stop_->isChecked() ? "true" : "false");
   mutate<nav_waypoint_msgs::srv::UpdateWaypoint>(update_client_, message, AppliedEdit::Waypoint);
@@ -498,17 +512,18 @@ void WaypointPanel::renameWaypoint()
     status_->setText("Apply or discard edits before renaming");
     return;
   }
+  const auto old_name = name_->text();
   bool ok = false;
   const auto new_name =
     QInputDialog::getText(
     this, "Rename Waypoint", "New name",
-    QLineEdit::Normal, name_->text(), &ok);
+    QLineEdit::Normal, old_name, &ok);
   if (!ok) {
     return;
   }
   auto message =
     std::make_shared<nav_waypoint_msgs::srv::RenameWaypoint::Request>();
-  message->old_name = name_->text().toStdString();
+  message->old_name = old_name.toStdString();
   message->new_name = new_name.toStdString();
   mutate<nav_waypoint_msgs::srv::RenameWaypoint>(rename_client_, message);
 }

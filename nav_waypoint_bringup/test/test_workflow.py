@@ -470,6 +470,68 @@ class WorkflowTest(unittest.TestCase):
                 os.close(writer)
             self.node.destroy_client(client)
 
+    def test_marker_drag_rejects_concurrent_pose_change(self):
+        updates = []
+        subscription = self.node.create_subscription(
+            InteractiveMarkerUpdate,
+            '/nav_waypoint_interactive_marker/interactive_marker/update', updates.append, 10)
+        try:
+            original = self.waypoint('drag_conflict', 0)
+            self.wait(lambda: any(any(m.name == original.name for m in u.markers)
+                                  for u in updates))
+            feedback = InteractiveMarkerFeedback()
+            feedback.header.frame_id = original.frame_id
+            feedback.client_id = 'workflow_test'
+            feedback.marker_name = original.name
+            feedback.pose = copy.deepcopy(original.pose)
+
+            # A release without a matching start must not modify the configuration.
+            feedback.event_type = feedback.MOUSE_UP
+            feedback.pose.position.x = 2.0
+            updates.clear()
+            self.feedback_pub.publish(feedback)
+            self.wait(lambda: any(any('Drag start unavailable' in m.description
+                                      for m in u.markers) for u in updates))
+
+            feedback.event_type = feedback.MOUSE_DOWN
+            feedback.pose = copy.deepcopy(original.pose)
+            self.feedback_pub.publish(feedback)
+            self.spin(0.1)
+            request = UpdateWaypointPose.Request(
+                name=original.name, frame_id=original.frame_id, expected_pose=original.pose)
+            request.pose = copy.deepcopy(original.pose)
+            request.pose.position.x = 1.0
+            updates.clear()
+            self.assertTrue(self.call(UpdateWaypointPose, '/nav_waypoint_server/update_pose',
+                                      request).success)
+            self.wait(lambda: any(w.name == original.name and w.pose.position.x == 1.0
+                                  for w in self.messages['waypoints'].waypoints))
+            self.wait(lambda: any(any(m.name == original.name and m.pose.position.x == 1.0
+                                      for m in u.markers) for u in updates))
+
+            feedback.event_type = feedback.MOUSE_UP
+            feedback.pose.position.x = 2.0
+            updates.clear()
+            self.feedback_pub.publish(feedback)
+            self.wait(lambda: any(any(m.name == original.name and m.pose.position.x == 1.0
+                                      and 'pose changed' in m.description
+                                      for m in u.markers) for u in updates))
+            current = next(w for w in self.messages['waypoints'].waypoints
+                           if w.name == original.name)
+            self.assertEqual(current.pose.position.x, 1.0)
+
+            # A fresh drag from the current position remains usable after rejection.
+            feedback.event_type = feedback.MOUSE_DOWN
+            feedback.pose = copy.deepcopy(current.pose)
+            self.feedback_pub.publish(feedback)
+            feedback.event_type = feedback.MOUSE_UP
+            feedback.pose.position.x = 3.0
+            self.feedback_pub.publish(feedback)
+            self.wait(lambda: any(w.name == original.name and w.pose.position.x == 3.0
+                                  for w in self.messages['waypoints'].waypoints))
+        finally:
+            self.node.destroy_subscription(subscription)
+
     def test_planar_marker_edit_preserves_height_roll_and_pitch(self):
         import math
         roll, pitch, yaw = 0.3, -0.2, 0.5
@@ -490,8 +552,13 @@ class WorkflowTest(unittest.TestCase):
         feedback.header.frame_id = 'warehouse'
         feedback.client_id = 'workflow_test'
         feedback.marker_name = 'spatial_marker'
+        feedback.event_type = feedback.MOUSE_DOWN
+        feedback.pose = copy.deepcopy(w.pose)
+        self.feedback_pub.publish(feedback)
         feedback.event_type = feedback.MOUSE_UP
         feedback.pose.position.x = 3.0
+        feedback.pose.orientation.x = 0.0
+        feedback.pose.orientation.y = 0.0
         feedback.pose.orientation.z = math.sin(0.9 / 2)
         feedback.pose.orientation.w = math.cos(0.9 / 2)
         self.feedback_pub.publish(feedback)
@@ -785,6 +852,10 @@ class WorkflowTest(unittest.TestCase):
             feedback.header.frame_id = 'warehouse'
             feedback.client_id = 'workflow_test'
             feedback.marker_name = 'marker'
+            feedback.event_type = feedback.MOUSE_DOWN
+            feedback.pose.position.x = 6.0
+            feedback.pose.orientation.w = 1.0
+            self.feedback_pub.publish(feedback)
             feedback.event_type = feedback.MOUSE_UP
             feedback.mouse_point_valid = False
             feedback.pose.position.x = 7.0

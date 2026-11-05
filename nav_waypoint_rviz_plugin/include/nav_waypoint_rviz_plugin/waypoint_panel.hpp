@@ -92,7 +92,8 @@ private:
   std::function<void()> cancel_request_;
   std::chrono::steady_clock::time_point deadline_;
   enum class AppliedEdit {None, Waypoint, Route};
-  void adoptConfiguration(Configuration::ConstSharedPtr configuration);
+  enum class ConfigurationResult {RetiredSource, Unchanged, Updated};
+  ConfigurationResult adoptConfiguration(Configuration::ConstSharedPtr configuration);
   void tick();
   void refresh();
   void selectWaypoint();
@@ -106,7 +107,7 @@ private:
   void request(
     std::shared_ptr<rclcpp::Client<Service>> client,
     typename Service::Request::SharedPtr message,
-    std::function<void(const typename Service::Response &)> accepted = {});
+    std::function<bool(const typename Service::Response &)> accepted = {});
   template<class Service>
   void mutate(
     std::shared_ptr<rclcpp::Client<Service>> client, typename Service::Request::SharedPtr message,

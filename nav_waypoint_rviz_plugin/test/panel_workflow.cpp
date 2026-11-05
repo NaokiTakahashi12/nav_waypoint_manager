@@ -24,6 +24,8 @@
 #include <QPushButton>
 #include <QThread>
 #include <QLabel>
+#include <QInputDialog>
+#include <QTimer>
 #include <gtest/gtest.h>
 #include "nav_waypoint_rviz_plugin/waypoint_panel.hpp"
 #include "nav_waypoint_rviz_plugin/add_waypoint_tool.hpp"
@@ -183,7 +185,7 @@ TEST(PanelWorkflow, PluginLoadingEditsRouteAndSave) {
     ASSERT_TRUE(click("Append Selected"));
     ASSERT_TRUE(click("Apply Route"));
     ASSERT_TRUE(wait([&]() {return routes == 1 && idle();}));
-    EXPECT_EQ(values[0]->text(), "6"); // applying route must preserve the waypoint draft
+    EXPECT_EQ(values[0]->text(), "6");  // applying route must preserve the waypoint draft
     ASSERT_TRUE(click("Append Selected"));
     ASSERT_TRUE(click("Apply Waypoint"));
     ASSERT_TRUE(
@@ -198,7 +200,7 @@ TEST(PanelWorkflow, PluginLoadingEditsRouteAndSave) {
     EXPECT_EQ(
       configuration.registered_waypoints.waypoints[0].properties[0].value,
       "keep");
-    EXPECT_EQ(lists[1]->count(), 4); // waypoint apply must not discard route draft
+    EXPECT_EQ(lists[1]->count(), 4);  // waypoint apply must not discard route draft
     auto stale = configuration; stale.revision = 1;
     stale.registered_waypoints.waypoints[0].pose.position.x = 0;
     publisher->publish(stale);
@@ -239,6 +241,152 @@ TEST(PanelWorkflow, PluginLoadingEditsRouteAndSave) {
     server_name->setText("/nav_waypoint_server");
     ASSERT_TRUE(click("Connect / Discard Edits"));
     ASSERT_TRUE(wait([&]() {return idle();}));
+
+    // Defer replies so configuration delivery can be ordered independently of RPC completion.
+    using Update = nav_waypoint_msgs::srv::UpdateWaypoint;
+    rclcpp::Service<Update>::SharedPtr pending_service;
+    std::shared_ptr<rmw_request_id_t> pending_header;
+    Update::Request::SharedPtr pending_update;
+    upsert.reset();
+    upsert = node->create_service<Update>(
+      "nav_waypoint_server/update",
+      [&](rclcpp::Service<Update>::SharedPtr service, std::shared_ptr<rmw_request_id_t> header,
+      Update::Request::SharedPtr message) {
+        pending_service = service; pending_header = header; pending_update = message;
+      });
+    auto addPoint = [&](const std::string & name) {
+        auto point = configuration.registered_waypoints.waypoints.back();
+        point.name = name; configuration.registered_waypoints.waypoints.push_back(point);
+      };
+    auto hasStatus = [&](const QString & text) {
+        for (auto label : panel->findChildren<QLabel *>()) {
+          if (label->text().contains(text)) {return true;}
+        }
+        return false;
+      };
+    lists[0]->setCurrentRow(0);
+    values[0]->setText("7");
+    ASSERT_TRUE(click("Apply Waypoint"));
+    ASSERT_TRUE(wait([&]() {return pending_update != nullptr;}));
+    Update::Response response;
+    response.success = true; response.message = "updated";
+    response.configuration = configuration;
+    ++response.configuration.revision;
+    response.configuration.registered_waypoints.waypoints[0] = pending_update->waypoint;
+    configuration.revision += 2;
+    addPoint("newer_snapshot"); publisher->publish(configuration);
+    ASSERT_TRUE(wait([&]() {return lists[0]->count() == 3;}));
+    pending_service->send_response(*pending_header, response);
+    ASSERT_TRUE(wait([&]() {return idle();}));
+    // A valid response older than the current snapshot completes the edit using current values.
+    EXPECT_DOUBLE_EQ(values[0]->text().toDouble(), 6.0);
+    ASSERT_TRUE(click("Save Waypoints and Route"));
+    ASSERT_TRUE(wait([&]() {return saved == 2 && idle();}));
+
+    pending_update.reset();
+    values[0]->setText("9");
+    ASSERT_TRUE(click("Append Selected"));
+    ASSERT_TRUE(click("Apply Waypoint"));
+    ASSERT_TRUE(wait([&]() {return pending_update != nullptr;}));
+    response.configuration = configuration;
+    ++response.configuration.revision;
+    response.configuration.registered_waypoints.waypoints[0] = pending_update->waypoint;
+    response.message = "previous server accepted";
+    configuration.source_id = "restarted_server"; configuration.revision = 1;
+    addPoint("after_restart"); publisher->publish(configuration);
+    ASSERT_TRUE(wait([&]() {return lists[0]->count() == 4;}));
+    pending_service->send_response(*pending_header, response);
+    ASSERT_TRUE(wait([&]() {return idle();}));
+    EXPECT_TRUE(hasStatus("previous server response ignored"));
+    EXPECT_DOUBLE_EQ(values[0]->text().toDouble(), 9.0);
+    ASSERT_TRUE(click("Apply Route"));
+    ASSERT_TRUE(wait([&]() {return routes == 3 && idle();}));
+    ASSERT_TRUE(click("Save Waypoints and Route"));
+    EXPECT_TRUE(hasStatus("Apply or discard local edits"));
+    EXPECT_EQ(saved, 2);  // The old waypoint response must leave the form draft dirty.
+
+    pending_update.reset();
+    ASSERT_TRUE(click("Apply Waypoint"));
+    ASSERT_TRUE(wait([&]() {return pending_update != nullptr;}));
+    EXPECT_DOUBLE_EQ(pending_update->expected_waypoint.pose.position.x, 6.0);
+    EXPECT_DOUBLE_EQ(pending_update->waypoint.pose.position.x, 9.0);
+    configuration.registered_waypoints.waypoints[0] = pending_update->waypoint;
+    ++configuration.revision; response.configuration = configuration;
+    pending_service->send_response(*pending_header, response);
+    ASSERT_TRUE(wait([&]() {return idle();}));
+    ASSERT_TRUE(click("Save Waypoints and Route"));
+    ASSERT_TRUE(wait([&]() {return saved == 3 && idle();}));
+
+    using SetRoute = nav_waypoint_msgs::srv::SetRoute;
+    rclcpp::Service<SetRoute>::SharedPtr pending_route_service;
+    std::shared_ptr<rmw_request_id_t> pending_route_header;
+    SetRoute::Request::SharedPtr pending_route;
+    set_route.reset();
+    set_route = node->create_service<SetRoute>(
+      "nav_waypoint_server/set_route",
+      [&](rclcpp::Service<SetRoute>::SharedPtr service, std::shared_ptr<rmw_request_id_t> header,
+      SetRoute::Request::SharedPtr message) {
+        pending_route_service = service; pending_route_header = header; pending_route = message;
+      });
+    ASSERT_TRUE(click("Append Selected"));
+    ASSERT_TRUE(click("Apply Route"));
+    ASSERT_TRUE(wait([&]() {return pending_route != nullptr;}));
+    SetRoute::Response route_response;
+    route_response.success = true; route_response.message = "previous route accepted";
+    route_response.configuration = configuration;
+    ++route_response.configuration.revision;
+    route_response.configuration.route = pending_route->route;
+    configuration.source_id = "next_server"; configuration.revision = 1;
+    addPoint("next_restart"); publisher->publish(configuration);
+    ASSERT_TRUE(wait([&]() {return lists[0]->count() == 5;}));
+    pending_route_service->send_response(*pending_route_header, route_response);
+    ASSERT_TRUE(wait([&]() {return idle();}));
+    EXPECT_TRUE(hasStatus("previous server response ignored"));
+    EXPECT_EQ(lists[1]->count(), static_cast<int>(pending_route->route.route.size()));
+    ASSERT_TRUE(click("Save Waypoints and Route"));
+    EXPECT_TRUE(hasStatus("Apply or discard local edits"));
+    EXPECT_EQ(saved, 3);
+    ASSERT_TRUE(click("Reload / Discard Edits"));
+
+    std::string rename_target;
+    auto rename = node->create_service<nav_waypoint_msgs::srv::RenameWaypoint>(
+      "nav_waypoint_server/rename",
+      [&](nav_waypoint_msgs::srv::RenameWaypoint::Request::SharedPtr message,
+      nav_waypoint_msgs::srv::RenameWaypoint::Response::SharedPtr result) {
+        rename_target = message->old_name;
+        result->success = false; result->message = "Original target no longer exists";
+      });
+    lists[0]->setCurrentRow(0);
+    // ROS delivery must continue inside QInputDialog's nested event loop.
+    QTimer dialog_updates;
+    int dialog_step = 0;
+    QObject::connect(
+      &dialog_updates, &QTimer::timeout, [&]() {
+        rclcpp::spin_some(node);
+        auto dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+        if (!dialog) {return;}
+        if (dialog_step == 0) {
+          configuration.registered_waypoints.waypoints.erase(
+            configuration.registered_waypoints.waypoints.begin());
+          configuration.route.route.clear();
+          ++configuration.revision; publisher->publish(configuration); ++dialog_step;
+        } else if (dialog_step == 1 && lists[0]->count() == 4) {
+          ++configuration.revision; publisher->publish(configuration); ++dialog_step;
+        } else if (dialog_step == 2 && lists[0]->currentRow() >= 0) {
+          dialog->setTextValue("renamed"); dialog->accept();
+        }
+      });
+    dialog_updates.start(10);
+    QTimer::singleShot(
+      5000, &dialog_updates, [&]() {
+        if (auto dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget())) {
+          dialog->reject();
+        }
+      });
+    ASSERT_TRUE(click("Rename"));
+    dialog_updates.stop();
+    ASSERT_TRUE(wait([&]() {return !rename_target.empty() && idle();}));
+    EXPECT_EQ(rename_target, "alpha");
   }
   node.reset();
   rclcpp::shutdown();

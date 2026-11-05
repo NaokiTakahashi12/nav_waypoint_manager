@@ -10,7 +10,8 @@ NavWaypointInteractiveMarkerNode::NavWaypointInteractiveMarkerNode(
   param_listener_(this->get_node_parameters_interface()),
   params_(param_listener_.get_params()),
   waypoints_subscriber_(nullptr),
-  interactive_marker_server_("~/interactive_marker", this)
+  // Preserve drag-start events when pose feedback arrives in a burst.
+  interactive_marker_server_("~/interactive_marker", this, rclcpp::QoS(100), rclcpp::QoS(100))
 {
   RCLCPP_INFO(this->get_logger(), "Start initialize");
 
@@ -49,6 +50,7 @@ void NavWaypointInteractiveMarkerNode::subscribeWaypointsCallback(
     RCLCPP_WARN(get_logger(), "Invalid markers: %s", e.what());
     return;
   }
+  if (waypoint_header_.frame_id != msg->header.frame_id) {drag_starts_.clear();}
   std::unordered_map<std::string, nav_waypoint_msgs::msg::Waypoint> incoming;
   for (const auto & w : msg->waypoints) {
     incoming.emplace(w.name, w);
@@ -56,6 +58,7 @@ void NavWaypointInteractiveMarkerNode::subscribeWaypointsCallback(
   bool changed = false;
   for (const auto & old : waypoint_index_) {
     if (!incoming.count(old.first)) {
+      drag_starts_.erase(old.first);
       interactive_marker_server_.erase(old.first);
       changed = true;
     }
@@ -122,14 +125,27 @@ void NavWaypointInteractiveMarkerNode::subscribeWaypointsCallback(
 void NavWaypointInteractiveMarkerNode::feedbackWaypointCallback(
   const visualization_msgs::msg::InteractiveMarkerFeedback::ConstSharedPtr & feedback)
 {
+  using Feedback = visualization_msgs::msg::InteractiveMarkerFeedback;
   if (waypoint_header_.frame_id.empty() ||
-    feedback->event_type != visualization_msgs::msg::InteractiveMarkerFeedback::MOUSE_UP ||
     feedback->header.frame_id != waypoint_header_.frame_id)
   {
     return;
   }
   const auto found = waypoint_index_.find(feedback->marker_name);
   if (found == waypoint_index_.end()) {return;}
+  if (feedback->event_type == Feedback::MOUSE_DOWN) {
+    drag_starts_[feedback->marker_name] = {feedback->client_id, found->second.pose};
+    return;
+  }
+  if (feedback->event_type != Feedback::MOUSE_UP) {return;}
+  const auto drag = drag_starts_.find(feedback->marker_name);
+  if (drag == drag_starts_.end()) {
+    restorePose(feedback->marker_name, "Drag start unavailable; retry");
+    return;
+  }
+  if (drag->second.client_id != feedback->client_id) {return;}
+  const auto expected_pose = drag->second.pose;
+  drag_starts_.erase(drag);
   if (found->second.pose == feedback->pose) {return;}
   auto msg = std::make_unique<nav_waypoint_msgs::msg::Waypoint>(found->second);
   msg->stamp = now();
@@ -138,9 +154,9 @@ void NavWaypointInteractiveMarkerNode::feedbackWaypointCallback(
   try {
     nav_waypoint_msgs::validateWaypoint(*msg, msg->frame_id);
     if (params_.interactive_xy_only) {
-      msg->pose.position.z = found->second.pose.position.z;
+      msg->pose.position.z = expected_pose.position.z;
       tf2::Quaternion original, edited;
-      tf2::fromMsg(found->second.pose.orientation, original);
+      tf2::fromMsg(expected_pose.orientation, original);
       tf2::fromMsg(feedback->pose.orientation, edited);
       double roll, pitch, yaw, ignored_roll, ignored_pitch;
       tf2::Matrix3x3(original).getRPY(roll, pitch, yaw);
@@ -159,7 +175,7 @@ void NavWaypointInteractiveMarkerNode::feedbackWaypointCallback(
     request->name = msg->name;
     request->frame_id = msg->frame_id;
     request->pose = msg->pose;
-    request->expected_pose = found->second.pose;
+    request->expected_pose = expected_pose;
     pending_name_ = msg->name;
     deadline_ = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     pending_id_ = pose_client_->async_send_request(
@@ -184,7 +200,6 @@ void NavWaypointInteractiveMarkerNode::feedbackWaypointCallback(
     RCLCPP_WARN(get_logger(), "Invalid marker pose: %s", e.what());
     restorePose(feedback->marker_name, e.what());
   }
-  interactive_marker_server_.applyChanges();
 }
 
 geometry_msgs::msg::Pose NavWaypointInteractiveMarkerNode::displayPose(

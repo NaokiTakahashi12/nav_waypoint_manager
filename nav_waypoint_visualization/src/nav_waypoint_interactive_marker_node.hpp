@@ -59,6 +59,12 @@ private:
   std_msgs::msg::Header waypoint_header_;
   geometry_msgs::msg::Pose displayPose(const geometry_msgs::msg::Pose & pose) const;
   std::unordered_map<std::string, nav_waypoint_msgs::msg::Waypoint> waypoint_index_;
+  struct DragStart
+  {
+    std::string client_id;
+    geometry_msgs::msg::Pose pose;
+  };
+  std::unordered_map<std::string, DragStart> drag_starts_;
 
   interactive_markers::InteractiveMarkerServer interactive_marker_server_;
 };
