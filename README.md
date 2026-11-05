@@ -25,6 +25,8 @@ Waypoint and route edits can be applied independently. If another edit conflicts
 
 For a different server, enter its node name (for example `/robot1/nav_waypoint_server`) and click **Connect / Discard Edits**. Set the Add Waypoint tool's **Waypoint Topic** to the registration converter's input topic. These connection settings are saved with the RViz configuration.
 
+In **Route Execution**, click **Start Route** to begin following the route, or **Resume Route** at a resume-required waypoint. **Reset to First Visit** returns to the start and awaits a separate start command; it does not stop the robot. The panel shows route progress, visit number, target waypoint and any blocking reason. Waypoint markers remain draggable during execution. Enter another route server name and click **Connect** to change its connection; this is saved with the RViz configuration. Both panels can also be added from RViz's **Panels → Add New Panel** menu.
+
 The CLI is also available:
 
 ```bash
@@ -57,6 +59,8 @@ Pass arguments as `name:=value`.
 | `reach_position_threshold` | `1.0` | Default radius in metres for points without an explicit radius. |
 | `max_transform_age` | `1.0` | Maximum dynamic TF age in seconds. |
 | `publish_unchanged_goals` | `true` | Republish the current goal periodically. |
+| `goal_topic` | `/goal_pose` | Navigation goal output topic. |
+| `set_waypoint_topic` | `/set_waypoint` | Waypoint registration input topic. |
 | `use_rviz` | `false` | Start RViz with the supplied configuration. |
 | `use_sim_time` | `false` | Use the ROS simulation clock. |
 

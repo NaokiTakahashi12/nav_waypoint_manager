@@ -3,7 +3,7 @@
 <package format="3">
   <name>nav_waypoint_rviz_plugin</name>
   <version>0.0.0</version>
-  <description>RViz tools and panel for waypoint and route editing.</description>
+  <description>RViz tools and panels for waypoint editing and route execution.</description>
   <maintainer email="naoki.takahashi060@gmail.com">Naoki Takahashi</maintainer>
   <license>MIT</license>
 
@@ -17,6 +17,7 @@
   <depend>pluginlib</depend>
   <depend>nav_waypoint_msgs</depend>
   <depend>std_srvs</depend>
+  <depend>std_msgs</depend>
   <depend>tf2_geometry_msgs</depend>
   <depend>qtbase5-dev</depend>
 

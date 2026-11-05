@@ -1,6 +1,8 @@
 Panels:
   - Class: nav_waypoint_rviz_plugin/WaypointPanel
     Name: Waypoint Editor
+  - Class: nav_waypoint_rviz_plugin/RouteExecutionPanel
+    Name: Route Execution
   - Class: rviz_common/Displays
     Help Height: 109
     Name: Displays
