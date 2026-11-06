@@ -24,7 +24,6 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QLineEdit>
 #include <QPushButton>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -49,7 +48,6 @@ RouteExecutionPanel::RouteExecutionPanel(QWidget * parent)
   server_namespace_->setInsertPolicy(QComboBox::NoInsert);
   server_namespace_->setToolTip("Select or enter a route server, then click Connect");
   server_namespace_->setEditText("/nav_route_server");
-  server_namespace_->lineEdit()->setObjectName("route_server_namespace");
   auto refresh_button = new QPushButton("Refresh", this);
   refresh_button->setObjectName("refresh_route_servers");
   refresh_button->setToolTip("Refresh servers publishing route progress");

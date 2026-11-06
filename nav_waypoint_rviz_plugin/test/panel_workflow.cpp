@@ -181,10 +181,9 @@ TEST(PanelWorkflow, PluginLoadingEditsRouteAndSave) {
     ASSERT_TRUE(wait([&]() {return lists[0]->count() == 2;}));
     auto candidates = panel->findChild<QComboBox *>("waypoint_server_candidates");
     auto refresh_servers = panel->findChild<QPushButton *>("refresh_waypoint_servers");
-    auto server_name = panel->findChild<QLineEdit *>("server_namespace");
     auto connection = panel->findChild<QLabel *>("waypoint_connection");
     ASSERT_NE(candidates, nullptr); ASSERT_NE(refresh_servers, nullptr);
-    ASSERT_NE(server_name, nullptr); ASSERT_NE(connection, nullptr);
+    ASSERT_NE(connection, nullptr);
     ASSERT_TRUE(
       wait(
         [&]() {
@@ -195,7 +194,7 @@ TEST(PanelWorkflow, PluginLoadingEditsRouteAndSave) {
     EXPECT_EQ(candidates->count(), 2);
     EXPECT_EQ(candidates->itemText(0), "/nav_waypoint_server");
     EXPECT_EQ(candidates->itemText(1), "/robot2/waypoint_catalog");
-    EXPECT_EQ(server_name->text(), "/nav_waypoint_server");
+    EXPECT_EQ(candidates->currentText(), "/nav_waypoint_server");
     EXPECT_EQ(connection->text(), "Editing server: /nav_waypoint_server");
 
     // Choosing a candidate does not discard edits or change the active server until Connect.
@@ -214,7 +213,7 @@ TEST(PanelWorkflow, PluginLoadingEditsRouteAndSave) {
     QString saved_server;
     ASSERT_TRUE(saved_connection.mapGetString("Waypoint Server", &saved_server));
     EXPECT_EQ(saved_server, "/robot2/waypoint_catalog");
-    server_name->setText("/nav_waypoint_server");
+    candidates->setEditText("/nav_waypoint_server");
     ASSERT_TRUE(click("Connect / Discard Edits"));
     ASSERT_TRUE(wait([&]() {return lists[0]->count() == 2 && idle();}));
     second_publisher.reset();
@@ -224,7 +223,7 @@ TEST(PanelWorkflow, PluginLoadingEditsRouteAndSave) {
           refresh_servers->click(); return candidates->findText("/robot2/waypoint_catalog") < 0;
         }));
     EXPECT_EQ(candidates->count(), 1);
-    EXPECT_EQ(server_name->text(), "/nav_waypoint_server");
+    EXPECT_EQ(candidates->currentText(), "/nav_waypoint_server");
     EXPECT_EQ(edited, 0); EXPECT_EQ(routes, 0); EXPECT_EQ(saved, 0);
     lists[0]->setCurrentRow(0);
     ASSERT_TRUE(click("Delete Waypoint"));
@@ -246,12 +245,12 @@ TEST(PanelWorkflow, PluginLoadingEditsRouteAndSave) {
     }
     values[0]->setText("6");
     ASSERT_TRUE(click("Append Selected"));
-    server_name->setText("/manually/entered/server");
+    candidates->setEditText("/manually/entered/server");
     refresh_servers->click();
-    EXPECT_EQ(server_name->text(), "/manually/entered/server");
+    EXPECT_EQ(candidates->currentText(), "/manually/entered/server");
     EXPECT_EQ(connection->text(), "Editing server: /nav_waypoint_server");
     EXPECT_EQ(values[0]->text(), "6"); EXPECT_EQ(lists[1]->count(), 3);
-    server_name->setText("/nav_waypoint_server");
+    candidates->setEditText("/nav_waypoint_server");
     ASSERT_TRUE(click("Apply Route"));
     ASSERT_TRUE(wait([&]() {return routes == 1 && idle();}));
     EXPECT_EQ(values[0]->text(), "6");  // applying route must preserve the waypoint draft
@@ -304,9 +303,9 @@ TEST(PanelWorkflow, PluginLoadingEditsRouteAndSave) {
       (std::vector<std::string>{"alpha", "alpha", "beta", "alpha"}));
     ASSERT_TRUE(click("Save Waypoints and Route"));
     ASSERT_TRUE(wait([&]() {return saved == 1 && idle();}));
-    server_name->setText("bad namespace"); ASSERT_TRUE(click("Connect / Discard Edits"));
+    candidates->setEditText("bad namespace"); ASSERT_TRUE(click("Connect / Discard Edits"));
     EXPECT_FALSE(idle());
-    server_name->setText("/nav_waypoint_server");
+    candidates->setEditText("/nav_waypoint_server");
     ASSERT_TRUE(click("Connect / Discard Edits"));
     ASSERT_TRUE(wait([&]() {return idle();}));
 

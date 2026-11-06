@@ -21,7 +21,6 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QLabel>
-#include <QLineEdit>
 #include <QPushButton>
 #include <QThread>
 #include <gtest/gtest.h>
@@ -77,12 +76,11 @@ TEST(RouteExecutionWorkflow, ProgressCommandsResetAndReconnect) {
     auto reason = panel->findChild<QLabel *>("route_reason");
     auto status = panel->findChild<QLabel *>("route_operation_status");
     auto connection = panel->findChild<QLabel *>("route_connection");
-    auto server = panel->findChild<QLineEdit *>("route_server_namespace");
     auto candidates = panel->findChild<QComboBox *>("route_server_candidates");
     auto refresh = panel->findChild<QPushButton *>("refresh_route_servers");
     ASSERT_NE(start, nullptr); ASSERT_NE(reset, nullptr); ASSERT_NE(state, nullptr);
     ASSERT_NE(visit, nullptr); ASSERT_NE(waypoint, nullptr); ASSERT_NE(reason, nullptr);
-    ASSERT_NE(status, nullptr); ASSERT_NE(server, nullptr); ASSERT_NE(connection, nullptr);
+    ASSERT_NE(status, nullptr); ASSERT_NE(connection, nullptr);
     ASSERT_NE(candidates, nullptr); ASSERT_NE(refresh, nullptr);
     auto wait = [&](std::function<bool()> condition, int milliseconds = 5000) {
         const auto end = std::chrono::steady_clock::now() +
@@ -111,7 +109,7 @@ TEST(RouteExecutionWorkflow, ProgressCommandsResetAndReconnect) {
     EXPECT_EQ(candidates->count(), 2);
     EXPECT_EQ(candidates->itemText(0), "/robot1/nav_route_server");
     EXPECT_EQ(candidates->itemText(1), "/robot2/route_executor");
-    EXPECT_EQ(server->text(), "/robot1/nav_route_server/");
+    EXPECT_EQ(candidates->currentText(), "/robot1/nav_route_server/");
     EXPECT_EQ(resumes, 0); EXPECT_EQ(resets, 0);
 
     // Selecting a discovered candidate still requires an explicit Connect action.
@@ -128,7 +126,7 @@ TEST(RouteExecutionWorkflow, ProgressCommandsResetAndReconnect) {
 
     // Refresh removes vanished candidates and preserves a manually entered connection name.
     second_publisher.reset();
-    server->setText("/robot1/nav_route_server/");
+    candidates->setEditText("/robot1/nav_route_server/");
     ASSERT_TRUE(reconnect());
     ASSERT_TRUE(
       wait(
@@ -136,7 +134,7 @@ TEST(RouteExecutionWorkflow, ProgressCommandsResetAndReconnect) {
           refresh->click(); return candidates->findText("/robot2/route_executor") < 0;
         }));
     EXPECT_EQ(candidates->count(), 1);
-    EXPECT_EQ(server->text(), "/robot1/nav_route_server/");
+    EXPECT_EQ(candidates->currentText(), "/robot1/nav_route_server/");
     ASSERT_TRUE(wait([&]() {return publisher->get_subscription_count() > 0;}));
     EXPECT_FALSE(start->isEnabled()); EXPECT_FALSE(reset->isEnabled());
     Progress progress;
@@ -148,12 +146,12 @@ TEST(RouteExecutionWorkflow, ProgressCommandsResetAndReconnect) {
     EXPECT_EQ(visit->text(), "1 / 3"); EXPECT_EQ(waypoint->text(), "alpha");
     EXPECT_EQ(start->text(), "Start Route");
     EXPECT_EQ(connection->text(), "Connected: /robot1/nav_route_server");
-    server->setText("/manually/entered/server");
+    candidates->setEditText("/manually/entered/server");
     refresh->click();
-    EXPECT_EQ(server->text(), "/manually/entered/server");
+    EXPECT_EQ(candidates->currentText(), "/manually/entered/server");
     EXPECT_EQ(connection->text(), "Connected: /robot1/nav_route_server");
     EXPECT_TRUE(start->isEnabled());
-    server->setText("/robot1/nav_route_server/");
+    candidates->setEditText("/robot1/nav_route_server/");
     rviz_common::Config saved;
     panel->save(saved);
     QString saved_server;
@@ -228,18 +226,19 @@ TEST(RouteExecutionWorkflow, ProgressCommandsResetAndReconnect) {
     // Reconnecting cancels pending work and drops callbacks belonging to the previous connection.
     reset->click();
     ASSERT_TRUE(wait([&]() {return resets == 4;}));
-    server->setText("bad namespace"); ASSERT_TRUE(reconnect());
+    candidates->setEditText("bad namespace"); ASSERT_TRUE(reconnect());
     EXPECT_FALSE(start->isEnabled()); EXPECT_FALSE(reset->isEnabled());
     pending_service->send_response(*pending_header, response);
     spinFor(250);
     EXPECT_FALSE(start->isEnabled()); EXPECT_FALSE(reset->isEnabled());
     EXPECT_FALSE(status->text().contains("acknowledged"));
-    server->setText("/other/nav_route_server"); ASSERT_TRUE(reconnect());
+    candidates->setEditText("/other/nav_route_server"); ASSERT_TRUE(reconnect());
     progress.state = "startup_wait"; progress.route_index = 0; progress.reason.clear();
     progress.waypoint_name = "alpha"; publisher->publish(progress);
     spinFor(250);
     EXPECT_EQ(state->text(), "-"); EXPECT_FALSE(start->isEnabled());
-    server->setText("/robot1/nav_route_server"); ASSERT_TRUE(reconnect());
+    candidates->setEditText("/robot1/nav_route_server");
+    ASSERT_TRUE(reconnect());
     // Latched progress works after reconnect.
     ASSERT_TRUE(wait([&]() {return start->isEnabled();}));
     EXPECT_EQ(visit->text(), "1 / 3");

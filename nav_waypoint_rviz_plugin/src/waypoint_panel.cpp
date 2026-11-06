@@ -124,7 +124,6 @@ WaypointPanel::WaypointPanel(QWidget * parent)
   server_namespace_->setToolTip(
     "Select or enter a waypoint server, then click Connect / Discard Edits");
   server_namespace_->setEditText("/nav_waypoint_server");
-  server_namespace_->lineEdit()->setObjectName("server_namespace");
   auto refresh_button = new QPushButton("Refresh", this);
   refresh_button->setObjectName("refresh_waypoint_servers");
   refresh_button->setToolTip("Refresh servers publishing waypoint and route configuration");

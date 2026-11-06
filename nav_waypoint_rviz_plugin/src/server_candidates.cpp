@@ -21,7 +21,6 @@
 #include "server_candidates.hpp"
 
 #include <QComboBox>
-#include <QSignalBlocker>
 #include <QStringList>
 #include <algorithm>
 #include <rclcpp/node.hpp>
@@ -48,7 +47,6 @@ void refreshServerCandidates(
   }
   candidates.sort();
   const auto current = selector.currentText();
-  QSignalBlocker blocker(selector);
   selector.clear();
   selector.addItems(candidates);
   selector.setCurrentIndex(selector.findText(current));
