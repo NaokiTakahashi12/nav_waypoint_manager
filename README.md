@@ -15,7 +15,19 @@ ros2 launch nav_waypoint_bringup waypoint_manager.launch.py use_rviz:=true
 
 Connect your navigation system to `/goal_pose` (`geometry_msgs/msg/PoseStamped`) and provide TF from `map` to `base_link`. Match `waypoint_frame_id` to your map frame.
 
-Use RViz **SetGoal** to register a waypoint, or drag its marker to edit it. Use the CLI to register named points and set their visit order:
+Use **Add Waypoint** (shortcut **W**) to place a point and set its heading. **SetGoal** remains a navigation command. Drag waypoint markers to reposition them.
+
+In the **Waypoint Editor** panel, select a registered point to edit its pose (metres/radians), reach radius or resume requirement, then click **Apply Waypoint**. Use **Rename** or **Delete Waypoint** for the selected point. A referenced point must first be removed from the route.
+
+Build the visit order with **Append Selected**, **Up**, **Down** and **Remove Visit**, then click **Apply Route**. Repeated visits are allowed. **Reload / Discard Edits** restores server values. Click **Save Waypoints and Route** to save applied changes to the configured file; RViz's own Save Config saves the display layout only. Operation results appear below the panel. Failed marker updates restore the committed pose and show the reason in the marker label.
+
+Waypoint and route edits can be applied independently. If another edit conflicts, reload before retrying. Numeric fields accept scientific notation.
+
+For a different server, select it from the list or enter its node name (for example `/robot1/nav_waypoint_server`), then click **Connect / Discard Edits**. **Refresh** updates the available server list without discarding edits or changing the connection. Set the Add Waypoint tool's **Waypoint Topic** to the registration converter's input topic. These connection settings are saved with the RViz configuration.
+
+In **Route Execution**, click **Start Route** to begin following the route, or **Resume Route** at a resume-required waypoint. **Reset to First Visit** returns to the start and awaits a separate start command; it does not stop the robot. The panel shows route progress, visit number, target waypoint and any blocking reason. Waypoint markers remain draggable during execution. Select a route server from the list or enter its name, then click **Connect**; this is saved with the RViz configuration. **Refresh** updates the available server list. Both panels can also be added from RViz's **Panels → Add New Panel** menu.
+
+The CLI is also available:
 
 ```bash
 ros2 run nav_waypoint_bringup waypoint_edit upsert entrance --position 1 0 0 --yaw 0
@@ -47,6 +59,8 @@ Pass arguments as `name:=value`.
 | `reach_position_threshold` | `1.0` | Default radius in metres for points without an explicit radius. |
 | `max_transform_age` | `1.0` | Maximum dynamic TF age in seconds. |
 | `publish_unchanged_goals` | `true` | Republish the current goal periodically. |
+| `goal_topic` | `/goal_pose` | Navigation goal output topic. |
+| `set_waypoint_topic` | `/set_waypoint` | Waypoint registration input topic. |
 | `use_rviz` | `false` | Start RViz with the supplied configuration. |
 | `use_sim_time` | `false` | Use the ROS simulation clock. |
 

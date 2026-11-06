@@ -1,0 +1,11 @@
+<library path="nav_waypoint_rviz_plugin">
+  <class name="nav_waypoint_rviz_plugin/AddWaypoint" type="nav_waypoint_rviz_plugin::AddWaypointTool" base_class_type="rviz_common::Tool">
+    <description>Register a waypoint without sending a navigation goal.</description>
+  </class>
+  <class name="nav_waypoint_rviz_plugin/WaypointPanel" type="nav_waypoint_rviz_plugin::WaypointPanel" base_class_type="rviz_common::Panel">
+    <description>Edit registered waypoints, visit order and save the configuration.</description>
+  </class>
+  <class name="nav_waypoint_rviz_plugin/RouteExecutionPanel" type="nav_waypoint_rviz_plugin::RouteExecutionPanel" base_class_type="rviz_common::Panel">
+    <description>Show route progress, start or resume following, and reset to the first visit.</description>
+  </class>
+</library>

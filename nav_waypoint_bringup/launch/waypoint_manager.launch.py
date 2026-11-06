@@ -51,9 +51,49 @@ def generate_launch_description():
         'use_sim_time': launch.substitutions.LaunchConfiguration('use_sim_time')
     }
 
-    shutdown_event = launch.actions.EmitEvent(
-        event=launch.events.Shutdown()
-    )
+    # Child exits during a parent shutdown must not request another shutdown.
+    shutdown_event = launch.actions.OpaqueFunction(
+        function=lambda context: [] if context.is_shutdown else [
+            launch.actions.EmitEvent(event=launch.events.Shutdown())])
+
+    def delayed_waypoint_server(context):
+        # TimerAction runs after an enclosing launch group may have restored its
+        # configuration. Capture the arguments while that scope is still active.
+        argument_names = (
+            'waypoint_frame_id', 'waypoints_file', 'route_file',
+            'waypoint_route_configuration_save_file', 'reach_position_threshold',
+            'use_sim_time',
+        )
+        captured_arguments = [
+            launch.actions.SetLaunchConfiguration(
+                name, launch.substitutions.LaunchConfiguration(name).perform(context))
+            for name in argument_names
+        ]
+        return [launch.actions.TimerAction(
+            period=1.0,
+            actions=[launch.actions.GroupAction(captured_arguments + [
+                launch_ros.actions.Node(
+                    package='nav_waypoint_server',
+                    executable='nav_waypoint_server_node',
+                    name='nav_waypoint_server',
+                    # The enclosing namespace scope also ends before the timer fires.
+                    namespace=context.launch_configurations.get('ros_namespace', '/'),
+                    output='screen',
+                    parameters=[
+                        waypoint_frame_id_param,
+                        waypoints_file_param,
+                        waypoint_route_configuration_save_file_param,
+                        route_file_param,
+                        {'default_goal_reached_radius':
+                         launch_ros.parameter_descriptions.ParameterValue(
+                             launch.substitutions.LaunchConfiguration(
+                                 'reach_position_threshold'), value_type=float)},
+                        use_sim_time_param
+                    ],
+                    on_exit=shutdown_event
+                )
+            ])]
+        )]
 
     return launch.LaunchDescription([
         launch.actions.DeclareLaunchArgument(
@@ -83,35 +123,15 @@ def generate_launch_description():
         launch.actions.DeclareLaunchArgument('reach_position_threshold', default_value='1.0'),
         launch.actions.DeclareLaunchArgument('max_transform_age', default_value='1.0'),
         launch.actions.DeclareLaunchArgument('publish_unchanged_goals', default_value='true'),
+        launch.actions.DeclareLaunchArgument('goal_topic', default_value='/goal_pose'),
+        launch.actions.DeclareLaunchArgument('set_waypoint_topic', default_value='/set_waypoint'),
         launch.actions.DeclareLaunchArgument('use_rviz', default_value='false'),
         launch.actions.DeclareLaunchArgument(
             'use_sim_time',
             default_value='false'
         ),
         launch.actions.GroupAction([
-            launch.actions.TimerAction(
-                period=1.0,
-                actions=[
-                    launch_ros.actions.Node(
-                        package='nav_waypoint_server',
-                        executable='nav_waypoint_server_node',
-                        name='nav_waypoint_server',
-                        output='screen',
-                        parameters=[
-                            waypoint_frame_id_param,
-                            waypoints_file_param,
-                            waypoint_route_configuration_save_file_param,
-                            route_file_param,
-                            {'default_goal_reached_radius':
-                             launch_ros.parameter_descriptions.ParameterValue(
-                                 launch.substitutions.LaunchConfiguration(
-                                     'reach_position_threshold'), value_type=float)},
-                            use_sim_time_param
-                        ],
-                        on_exit=shutdown_event
-                    )
-                ]
-            ),
+            launch.actions.OpaqueFunction(function=delayed_waypoint_server),
             launch_ros.actions.Node(
                 package='nav_waypoint_server',
                 executable='nav_route_server_node',
@@ -159,7 +179,7 @@ def generate_launch_description():
                     use_sim_time_param
                 ],
                 remappings=[
-                    ('~/input_pose', '/set_waypoint'),
+                    ('~/input_pose', launch.substitutions.LaunchConfiguration('set_waypoint_topic')),
                     ('~/output_waypoint', 'nav_waypoint_server/regist')
                 ],
                 on_exit=shutdown_event
@@ -178,7 +198,7 @@ def generate_launch_description():
                 ],
                 remappings=[
                     ('~/input_waypoint', 'nav_route_server/waypoint'),
-                    ('~/output_pose', '/goal_pose')
+                    ('~/output_pose', launch.substitutions.LaunchConfiguration('goal_topic'))
                 ],
                 on_exit=shutdown_event
             ),

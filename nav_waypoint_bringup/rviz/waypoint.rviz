@@ -1,4 +1,8 @@
 Panels:
+  - Class: nav_waypoint_rviz_plugin/WaypointPanel
+    Name: Waypoint Editor
+  - Class: nav_waypoint_rviz_plugin/RouteExecutionPanel
+    Name: Route Execution
   - Class: rviz_common/Displays
     Help Height: 109
     Name: Displays
@@ -110,13 +114,10 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /initialpose
+    - Class: nav_waypoint_rviz_plugin/AddWaypoint
     - Class: rviz_default_plugins/SetGoal
       Topic:
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-        Value: /set_waypoint
+        Value: /goal_pose
     - Class: rviz_default_plugins/PublishPoint
       Single click: true
       Topic:

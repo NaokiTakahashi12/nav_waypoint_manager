@@ -30,7 +30,8 @@ import time
 import rclpy
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from nav_waypoint_msgs.msg import WaypointRouteConfiguration, Property, Route, Waypoint
-from nav_waypoint_msgs.srv import DeleteWaypoint, RenameWaypoint, SetRoute, UpsertWaypoint
+from nav_waypoint_msgs.srv import (
+    DeleteWaypoint, RenameWaypoint, SetRoute, UpdateWaypoint, UpsertWaypoint)
 from std_srvs.srv import Trigger
 
 
@@ -93,7 +94,8 @@ def main():
         missing = [name for name in route.route if name not in known]
         if missing:
             raise ValueError('Unknown route waypoint: ' + missing[0])
-        call(SetRoute, 'nav_waypoint_server/set_route', SetRoute.Request(route=route))
+        call(SetRoute, 'nav_waypoint_server/set_route',
+             SetRoute.Request(route=route, expected_route=snapshots['route']))
 
     try:
         wait_for(lambda: 'waypoints' in snapshots and 'route' in snapshots)
@@ -121,7 +123,12 @@ def main():
                     raise ValueError('--property requires KEY=VALUE')
                 properties[key] = value
             w.properties = [Property(key=k, value=v) for k, v in properties.items()]
-            call(UpsertWaypoint, 'nav_waypoint_server/upsert', UpsertWaypoint.Request(waypoint=w))
+            if args.name in waypoints:
+                call(UpdateWaypoint, 'nav_waypoint_server/update', UpdateWaypoint.Request(
+                    expected_waypoint=waypoints[args.name], waypoint=w))
+            else:
+                call(UpsertWaypoint, 'nav_waypoint_server/upsert',
+                     UpsertWaypoint.Request(waypoint=w))
         elif args.command == 'set-route':
             set_route(Route(header=snapshots['route'].header, route=args.names))
         elif args.command == 'delete':

@@ -3,3 +3,4 @@ string new_name
 ---
 bool success
 string message
+nav_waypoint_msgs/WaypointRouteConfiguration configuration

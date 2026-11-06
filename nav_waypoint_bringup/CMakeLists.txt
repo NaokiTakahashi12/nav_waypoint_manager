@@ -16,6 +16,9 @@ if(BUILD_TESTING)
   ament_add_pytest_test(workflow test/test_workflow.py TIMEOUT 120
     ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   )
+  ament_add_pytest_test(launch_arguments test/test_launch_arguments.py
+    ENV PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+  )
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
   # comment the line when a copyright and license is added to all source files

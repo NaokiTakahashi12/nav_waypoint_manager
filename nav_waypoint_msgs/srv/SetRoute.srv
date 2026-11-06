@@ -1,4 +1,6 @@
 nav_waypoint_msgs/Route route
+nav_waypoint_msgs/Route expected_route
 ---
 bool success
 string message
+nav_waypoint_msgs/WaypointRouteConfiguration configuration
