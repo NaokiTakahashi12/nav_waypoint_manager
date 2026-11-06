@@ -14,7 +14,7 @@ find_package(std_srvs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 add_library(${PROJECT_NAME} SHARED
-  src/add_waypoint_tool.cpp src/waypoint_panel.cpp src/route_execution_panel.cpp)
+  src/add_waypoint_tool.cpp src/waypoint_panel.cpp src/route_execution_panel.cpp src/server_candidates.cpp)
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_14)
 target_include_directories(${PROJECT_NAME} PUBLIC include)
 target_link_libraries(${PROJECT_NAME} Qt5::Widgets)

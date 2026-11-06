@@ -21,6 +21,7 @@
 #include "nav_waypoint_rviz_plugin/waypoint_panel.hpp"
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleValidator>
 #include <QLocale>
 #include <QFormLayout>
@@ -48,6 +49,7 @@
 #include <rviz_common/ros_integration/ros_node_abstraction_iface.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
+#include "server_candidates.hpp"
 namespace nav_waypoint_rviz_plugin
 {
 // Persistent clients and one bounded asynchronous operation keep ROS waits off the UI thread.
@@ -115,15 +117,31 @@ WaypointPanel::WaypointPanel(QWidget * parent)
 {
   auto layout = new QVBoxLayout(this);
   auto connection = new QHBoxLayout;
-  server_namespace_ = new QLineEdit("/nav_waypoint_server", this);
-  server_namespace_->setObjectName("server_namespace");
+  server_namespace_ = new QComboBox(this);
+  server_namespace_->setObjectName("waypoint_server_candidates");
+  server_namespace_->setEditable(true);
+  server_namespace_->setInsertPolicy(QComboBox::NoInsert);
+  server_namespace_->setToolTip(
+    "Select or enter a waypoint server, then click Connect / Discard Edits");
+  server_namespace_->setEditText("/nav_waypoint_server");
+  server_namespace_->lineEdit()->setObjectName("server_namespace");
+  auto refresh_button = new QPushButton("Refresh", this);
+  refresh_button->setObjectName("refresh_waypoint_servers");
+  refresh_button->setToolTip("Refresh servers publishing waypoint and route configuration");
   auto connect_button = new QPushButton("Connect / Discard Edits", this);
-  connection->addWidget(server_namespace_); connection->addWidget(connect_button);
+  connection->addWidget(server_namespace_, 1);
+  connection->addWidget(refresh_button); connection->addWidget(connect_button);
   layout->addLayout(connection);
+  connect(refresh_button, &QPushButton::clicked, this, [this]() {refreshServers();});
   connect(
     connect_button, &QPushButton::clicked, this, [this]() {
       connectServer(); emit configChanged();
     });
+  connection_ = new QLabel(this);
+  connection_->setObjectName("waypoint_connection");
+  connection_->setWordWrap(true);
+  connection_->setTextFormat(Qt::PlainText);
+  layout->addWidget(connection_);
   controls_ = new QWidget(this);
   auto body = new QVBoxLayout(controls_);
   auto button = [this](QBoxLayout * row, const QString & label,
@@ -261,13 +279,14 @@ void WaypointPanel::onInitialize()
 void WaypointPanel::initializeRos(rclcpp::Node::SharedPtr node)
 {
   node_ = std::move(node);
+  refreshServers();
   connectServer();
 }
 void WaypointPanel::load(const rviz_common::Config & config)
 {
   Panel::load(config);
   QString server;
-  if (config.mapGetString("Waypoint Server", &server)) {server_namespace_->setText(server);}
+  if (config.mapGetString("Waypoint Server", &server)) {server_namespace_->setEditText(server);}
   if (node_) {connectServer();}
 }
 void WaypointPanel::save(rviz_common::Config config) const
@@ -283,7 +302,8 @@ void WaypointPanel::connectServer()
   configuration_.reset(); inbox_ = std::make_shared<Inbox>(); retired_sources_.clear();
   form_dirty_ = false; route_dirty_ = false; edited_ = nav_waypoint_msgs::msg::Waypoint{};
   waypoints_->clear(); route_->clear(); name_->clear();
-  server_prefix_ = server_namespace_->text().trimmed().toStdString();
+  connection_->clear();
+  server_prefix_ = server_namespace_->currentText().trimmed().toStdString();
   while (server_prefix_.size() > 1 && server_prefix_.back() == '/') {server_prefix_.pop_back();}
   controls_->setEnabled(false);
   try {
@@ -302,9 +322,22 @@ void WaypointPanel::connectServer()
     route_client_ = node_->create_client<nav_waypoint_msgs::srv::SetRoute>(
       server_prefix_ + "/set_route");
     save_client_ = node_->create_client<std_srvs::srv::Trigger>(server_prefix_ + "/save");
+    connection_->setText("Editing server: " + QString::fromStdString(server_prefix_));
     status_->setText("Waiting for configuration");
   } catch (const std::exception & e) {
     subscription_.reset(); inbox_ = std::make_shared<Inbox>();
+    status_->setText(QString::fromUtf8(e.what()));
+  }
+}
+
+void WaypointPanel::refreshServers()
+{
+  if (!node_) {return;}
+  try {
+    refreshServerCandidates(
+      *server_namespace_, *node_, "/configuration",
+      "nav_waypoint_msgs/msg/WaypointRouteConfiguration");
+  } catch (const std::exception & e) {
     status_->setText(QString::fromUtf8(e.what()));
   }
 }

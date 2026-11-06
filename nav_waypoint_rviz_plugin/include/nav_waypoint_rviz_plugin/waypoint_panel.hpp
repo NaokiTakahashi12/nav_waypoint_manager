@@ -41,6 +41,7 @@ class QListWidget;
 class QLineEdit;
 class QCheckBox;
 class QLabel;
+class QComboBox;
 namespace nav_waypoint_rviz_plugin
 {
 class WaypointPanel : public rviz_common::Panel
@@ -70,9 +71,11 @@ private:
   rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr save_client_;
   rclcpp::Node::SharedPtr node_;
   rclcpp::Subscription<Configuration>::SharedPtr subscription_;
-  QLineEdit * server_namespace_;
+  QComboBox * server_namespace_;
+  QLabel * connection_;
   std::string server_prefix_;
   void connectServer();
+  void refreshServers();
   QWidget * controls_;
   QListWidget * waypoints_;
   QListWidget * route_;

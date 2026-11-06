@@ -33,7 +33,7 @@
 #include <std_srvs/srv/empty.hpp>
 
 class QLabel;
-class QLineEdit;
+class QComboBox;
 class QPushButton;
 
 namespace nav_waypoint_rviz_plugin
@@ -67,7 +67,7 @@ private:
   std::chrono::steady_clock::time_point deadline_;
   bool awaiting_progress_{false};
   std::string server_prefix_;
-  QLineEdit * server_namespace_;
+  QComboBox * server_namespace_;
   QLabel * connection_;
   QLabel * state_;
   QLabel * visit_;
@@ -78,6 +78,7 @@ private:
   QPushButton * reset_button_;
 
   void connectServer();
+  void refreshServers();
   void tick();
   void showProgress();
   void updateControls();

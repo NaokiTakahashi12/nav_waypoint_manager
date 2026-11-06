@@ -19,6 +19,7 @@
 // SOFTWARE.
 
 #include <QApplication>
+#include <QComboBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -38,6 +39,14 @@ TEST(RouteExecutionWorkflow, ProgressCommandsResetAndReconnect) {
     using Reset = std_srvs::srv::Empty;
     auto publisher = node->create_publisher<Progress>(
       "/robot1/nav_route_server/progress", rclcpp::QoS(1).transient_local());
+    auto second_publisher = node->create_publisher<Progress>(
+      "/robot2/route_executor/progress", rclcpp::QoS(1).transient_local());
+    auto wrong_type = node->create_publisher<std_msgs::msg::Bool>("/wrong_type/progress", 1);
+    auto other_topic = node->create_publisher<Progress>("/other_topic", 1);
+    auto listener_only = node->create_subscription<Progress>(
+      "/listener_only/progress", 1, [](Progress::ConstSharedPtr) {});
+    auto mixed_type_listener = node->create_subscription<Progress>(
+      "/wrong_type/progress", 1, [](Progress::ConstSharedPtr) {});
     int resumes = 0, resets = 0;
     auto subscriber = node->create_subscription<std_msgs::msg::Bool>(
       "/robot1/nav_route_server/release_resume", 10,
@@ -67,10 +76,14 @@ TEST(RouteExecutionWorkflow, ProgressCommandsResetAndReconnect) {
     auto waypoint = panel->findChild<QLabel *>("route_waypoint");
     auto reason = panel->findChild<QLabel *>("route_reason");
     auto status = panel->findChild<QLabel *>("route_operation_status");
+    auto connection = panel->findChild<QLabel *>("route_connection");
     auto server = panel->findChild<QLineEdit *>("route_server_namespace");
+    auto candidates = panel->findChild<QComboBox *>("route_server_candidates");
+    auto refresh = panel->findChild<QPushButton *>("refresh_route_servers");
     ASSERT_NE(start, nullptr); ASSERT_NE(reset, nullptr); ASSERT_NE(state, nullptr);
     ASSERT_NE(visit, nullptr); ASSERT_NE(waypoint, nullptr); ASSERT_NE(reason, nullptr);
-    ASSERT_NE(status, nullptr); ASSERT_NE(server, nullptr);
+    ASSERT_NE(status, nullptr); ASSERT_NE(server, nullptr); ASSERT_NE(connection, nullptr);
+    ASSERT_NE(candidates, nullptr); ASSERT_NE(refresh, nullptr);
     auto wait = [&](std::function<bool()> condition, int milliseconds = 5000) {
         const auto end = std::chrono::steady_clock::now() +
           std::chrono::milliseconds(milliseconds);
@@ -88,6 +101,42 @@ TEST(RouteExecutionWorkflow, ProgressCommandsResetAndReconnect) {
         return false;
       };
     EXPECT_FALSE(start->isEnabled()); EXPECT_FALSE(reset->isEnabled());
+    ASSERT_TRUE(
+      wait(
+        [&]() {
+          refresh->click();
+          return candidates->findText("/robot1/nav_route_server") >= 0 &&
+          candidates->findText("/robot2/route_executor") >= 0;
+        }));
+    EXPECT_EQ(candidates->count(), 2);
+    EXPECT_EQ(candidates->itemText(0), "/robot1/nav_route_server");
+    EXPECT_EQ(candidates->itemText(1), "/robot2/route_executor");
+    EXPECT_EQ(server->text(), "/robot1/nav_route_server/");
+    EXPECT_EQ(resumes, 0); EXPECT_EQ(resets, 0);
+
+    // Selecting a discovered candidate still requires an explicit Connect action.
+    candidates->setCurrentIndex(candidates->findText("/robot2/route_executor"));
+    ASSERT_TRUE(wait([&]() {return publisher->get_subscription_count() > 0;}));
+    EXPECT_EQ(second_publisher->get_subscription_count(), 0U);
+    Progress second_progress;
+    second_progress.state = "startup_wait"; second_progress.route_index = 0;
+    second_progress.route_size = 1; second_progress.waypoint_name = "second_route";
+    second_publisher->publish(second_progress);
+    ASSERT_TRUE(reconnect());
+    ASSERT_TRUE(wait([&]() {return waypoint->text() == "second_route";}));
+    EXPECT_FALSE(start->isEnabled());  // No command subscriber exists for this server.
+
+    // Refresh removes vanished candidates and preserves a manually entered connection name.
+    second_publisher.reset();
+    server->setText("/robot1/nav_route_server/");
+    ASSERT_TRUE(reconnect());
+    ASSERT_TRUE(
+      wait(
+        [&]() {
+          refresh->click(); return candidates->findText("/robot2/route_executor") < 0;
+        }));
+    EXPECT_EQ(candidates->count(), 1);
+    EXPECT_EQ(server->text(), "/robot1/nav_route_server/");
     ASSERT_TRUE(wait([&]() {return publisher->get_subscription_count() > 0;}));
     EXPECT_FALSE(start->isEnabled()); EXPECT_FALSE(reset->isEnabled());
     Progress progress;
@@ -98,6 +147,13 @@ TEST(RouteExecutionWorkflow, ProgressCommandsResetAndReconnect) {
     EXPECT_EQ(state->text(), "Awaiting start");
     EXPECT_EQ(visit->text(), "1 / 3"); EXPECT_EQ(waypoint->text(), "alpha");
     EXPECT_EQ(start->text(), "Start Route");
+    EXPECT_EQ(connection->text(), "Connected: /robot1/nav_route_server");
+    server->setText("/manually/entered/server");
+    refresh->click();
+    EXPECT_EQ(server->text(), "/manually/entered/server");
+    EXPECT_EQ(connection->text(), "Connected: /robot1/nav_route_server");
+    EXPECT_TRUE(start->isEnabled());
+    server->setText("/robot1/nav_route_server/");
     rviz_common::Config saved;
     panel->save(saved);
     QString saved_server;

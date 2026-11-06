@@ -20,6 +20,7 @@
 
 #include "nav_waypoint_rviz_plugin/route_execution_panel.hpp"
 
+#include <QComboBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -33,6 +34,7 @@
 #include <pluginlib/class_list_macros.hpp>
 #include <rviz_common/display_context.hpp>
 #include <rviz_common/ros_integration/ros_node_abstraction_iface.hpp>
+#include "server_candidates.hpp"
 
 namespace nav_waypoint_rviz_plugin
 {
@@ -41,16 +43,27 @@ RouteExecutionPanel::RouteExecutionPanel(QWidget * parent)
 {
   auto layout = new QVBoxLayout(this);
   auto connection = new QHBoxLayout;
-  server_namespace_ = new QLineEdit("/nav_route_server", this);
-  server_namespace_->setObjectName("route_server_namespace");
+  server_namespace_ = new QComboBox(this);
+  server_namespace_->setObjectName("route_server_candidates");
+  server_namespace_->setEditable(true);
+  server_namespace_->setInsertPolicy(QComboBox::NoInsert);
+  server_namespace_->setToolTip("Select or enter a route server, then click Connect");
+  server_namespace_->setEditText("/nav_route_server");
+  server_namespace_->lineEdit()->setObjectName("route_server_namespace");
+  auto refresh_button = new QPushButton("Refresh", this);
+  refresh_button->setObjectName("refresh_route_servers");
+  refresh_button->setToolTip("Refresh servers publishing route progress");
   auto connect_button = new QPushButton("Connect", this);
-  connection->addWidget(server_namespace_); connection->addWidget(connect_button);
+  connection->addWidget(server_namespace_, 1);
+  connection->addWidget(refresh_button); connection->addWidget(connect_button);
   layout->addLayout(connection);
+  connect(refresh_button, &QPushButton::clicked, this, [this]() {refreshServers();});
   connect(
     connect_button, &QPushButton::clicked, this, [this]() {
       connectServer(); emit configChanged();
     });
   connection_ = new QLabel("Waiting for route progress", this);
+  connection_->setObjectName("route_connection");
   connection_->setWordWrap(true);
   layout->addWidget(connection_);
   auto form = new QFormLayout;
@@ -102,6 +115,7 @@ void RouteExecutionPanel::onInitialize()
 void RouteExecutionPanel::initializeRos(rclcpp::Node::SharedPtr node)
 {
   node_ = std::move(node);
+  refreshServers();
   connectServer();
 }
 
@@ -109,7 +123,7 @@ void RouteExecutionPanel::load(const rviz_common::Config & config)
 {
   Panel::load(config);
   QString server;
-  if (config.mapGetString("Route Server", &server)) {server_namespace_->setText(server);}
+  if (config.mapGetString("Route Server", &server)) {server_namespace_->setEditText(server);}
   if (node_) {connectServer();}
 }
 
@@ -125,7 +139,7 @@ void RouteExecutionPanel::connectServer()
   cancelReset();
   progress_subscription_.reset(); resume_publisher_.reset(); reset_client_.reset();
   inbox_ = std::make_shared<Inbox>(); progress_.reset(); awaiting_progress_ = false;
-  server_prefix_ = server_namespace_->text().trimmed().toStdString();
+  server_prefix_ = server_namespace_->currentText().trimmed().toStdString();
   while (server_prefix_.size() > 1 && server_prefix_.back() == '/') {server_prefix_.pop_back();}
   status_->clear(); showProgress();
   try {
@@ -143,6 +157,17 @@ void RouteExecutionPanel::connectServer()
     status_->setText(QString::fromUtf8(e.what()));
   }
   updateControls();
+}
+
+void RouteExecutionPanel::refreshServers()
+{
+  if (!node_) {return;}
+  try {
+    refreshServerCandidates(
+      *server_namespace_, *node_, "/progress", "nav_waypoint_msgs/msg/RouteProgress");
+  } catch (const std::exception & e) {
+    status_->setText(QString::fromUtf8(e.what()));
+  }
 }
 
 void RouteExecutionPanel::tick()
@@ -209,9 +234,11 @@ void RouteExecutionPanel::updateControls()
 {
   const bool connected = progress_ && progress_subscription_ &&
     progress_subscription_->get_publisher_count() > 0;
+  const auto server = QString::fromStdString(server_prefix_);
   connection_->setText(
     !progress_ ? "Waiting for route progress" :
-    (connected ? "Route progress connected" : "No progress publisher; last state shown"));
+    (connected ? "Connected: " + server : "No progress publisher: " + server +
+    " (last state shown)"));
   const bool ready = connected && !reset_future_.valid();
   const bool active = progress_ && progress_->route_index >= 0 &&
     static_cast<uint32_t>(progress_->route_index) < progress_->route_size;

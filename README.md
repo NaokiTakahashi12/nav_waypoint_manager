@@ -23,9 +23,9 @@ Build the visit order with **Append Selected**, **Up**, **Down** and **Remove Vi
 
 Waypoint and route edits can be applied independently. If another edit conflicts, reload before retrying. Numeric fields accept scientific notation.
 
-For a different server, enter its node name (for example `/robot1/nav_waypoint_server`) and click **Connect / Discard Edits**. Set the Add Waypoint tool's **Waypoint Topic** to the registration converter's input topic. These connection settings are saved with the RViz configuration.
+For a different server, select it from the list or enter its node name (for example `/robot1/nav_waypoint_server`), then click **Connect / Discard Edits**. **Refresh** updates the available server list without discarding edits or changing the connection. Set the Add Waypoint tool's **Waypoint Topic** to the registration converter's input topic. These connection settings are saved with the RViz configuration.
 
-In **Route Execution**, click **Start Route** to begin following the route, or **Resume Route** at a resume-required waypoint. **Reset to First Visit** returns to the start and awaits a separate start command; it does not stop the robot. The panel shows route progress, visit number, target waypoint and any blocking reason. Waypoint markers remain draggable during execution. Enter another route server name and click **Connect** to change its connection; this is saved with the RViz configuration. Both panels can also be added from RViz's **Panels → Add New Panel** menu.
+In **Route Execution**, click **Start Route** to begin following the route, or **Resume Route** at a resume-required waypoint. **Reset to First Visit** returns to the start and awaits a separate start command; it does not stop the robot. The panel shows route progress, visit number, target waypoint and any blocking reason. Waypoint markers remain draggable during execution. Select a route server from the list or enter its name, then click **Connect**; this is saved with the RViz configuration. **Refresh** updates the available server list. Both panels can also be added from RViz's **Panels → Add New Panel** menu.
 
 The CLI is also available:
 
